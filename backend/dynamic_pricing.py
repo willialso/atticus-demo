@@ -32,7 +32,7 @@ def black_scholes_premium(S, K, T, r, sigma, option_type='call'):
     else:
         raise ValueError("Invalid option_type. Use 'call' or 'put'.")
     return max(premium, 0.00000001) # Ensure premium is not zero or negative for display
-*Reference: [5], [9]*
+# *Reference: [5], [9]*
 
 # --- Volatility Calculation ---
 # For a demo, we might start with a fixed volatility or a very simple historical one.
@@ -80,7 +80,7 @@ def generate_dynamic_strikes(current_btc_price, num_otm=2, num_itm=2, num_atm=1)
     strikes['otm_put'] = [round((atm_strike - (i+1) * (current_btc_price * step_percentage))/10)*10 for i in range(num_otm)]
     
     return strikes
-*Reference: [6]*
+# *Reference: [6]*
 
 # --- Option Chain Generation ---
 EXPIRY_MINUTES = 15
