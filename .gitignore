@@ -1,0 +1,53 @@
+# Python bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment folder
+myenv/  # <--- ADDED THIS LINE specifically for your "myenv" folder
+
+# Common virtual environment names (good to keep these too)
+venv/
+.venv/
+env/
+.env/ # Be careful if you use a .env FILE for secrets
+
+# Environment variables file (VERY IMPORTANT FOR SECRETS)
+.env
+.env.*
+!.env.example # If you have an example .env file, you might want to commit that
+
+# IDE and editor specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Operating System generated files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Distribution / build artifacts
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Temporary files
+tmp/
+*.tmp
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
