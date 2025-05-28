@@ -8,6 +8,19 @@ PLATFORM_NAME = "Atticus"
 VERSION = "2.2" # Version updated to reflect new engine capabilities
 DEMO_MODE = True
 
+# === WEBSOCKET FEED URLS === (FIXED: Use alternative Coinbase endpoint)
+COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"  # ← FIXED: Changed from blocked endpoint
+KRAKEN_WS_URL_V2 = "wss://ws.kraken.com/v2"
+OKX_WS_URL = "wss://ws.okx.com:8443/ws/v5/public"
+
+# === EXCHANGE-SPECIFIC PRODUCT/TICKER SYMBOLS ===
+COINBASE_PRODUCT_ID = "BTC-USD"           # Required by coinbase_client.py
+KRAKEN_TICKER_SYMBOL = "BTC/USD"          # Required by kraken_client.py (v2 format)
+
+# Backup URLs for reference
+COINBASE_WS_URL_BACKUP = "wss://ws-feed.pro.coinbase.com"        # CloudFlare blocked
+COINBASE_WS_URL_ALTERNATIVE = "wss://ws-feed.exchange.coinbase.com"  # Working alternative
+
 # === CONTRACT SPECIFICATIONS ===
 # *** Updated contract size to 0.1 BTC for institutional standard ***
 STANDARD_CONTRACT_SIZE_BTC = 0.1 # Each contract represents 0.1 BTC
@@ -36,7 +49,6 @@ RISK_FREE_RATE = 0.05 # 5% annual risk-free rate
 # Adjusted for more realistic smile effects and broader range for BTC
 MIN_VOLATILITY = 0.15 # 15% minimum annualized volatility floor
 MAX_VOLATILITY = 3.00 # 300% maximum volatility cap
-
 DEFAULT_VOLATILITY = 0.80 # 80% default if calculation fails or for initial warm-up
 DEFAULT_VOLATILITY_FOR_BASIC_BS = 0.80 # If using a very basic BS model elsewhere
 
@@ -45,17 +57,18 @@ VOLATILITY_REGIME_DETECTION = True
 VOLATILITY_EWMA_ALPHA = 0.1 # Decay factor for EWMA volatility
 
 # Regime multipliers (can be tuned based on market observation)
-VOLATILITY_REGIME_MULTIPLIER_LOW = 0.85    # Applied to EWMA vol in low vol regime
-VOLATILITY_REGIME_MULTIPLIER_MEDIUM = 1.0   # Applied to EWMA vol in medium vol regime
-VOLATILITY_REGIME_MULTIPLIER_HIGH = 1.25  # Applied to EWMA vol in high vol regime
+VOLATILITY_REGIME_MULTIPLIER_LOW = 0.85 # Applied to EWMA vol in low vol regime
+VOLATILITY_REGIME_MULTIPLIER_MEDIUM = 1.0 # Applied to EWMA vol in medium vol regime
+VOLATILITY_REGIME_MULTIPLIER_HIGH = 1.25 # Applied to EWMA vol in high vol regime
 
 # Short-term expiry volatility adjustments (applied to ATM vol before smile/skew)
 # These factors boost ATM volatility for options very close to expiry.
 VOLATILITY_SHORT_EXPIRY_ADJUSTMENTS = { # expiry_minutes: multiplier
-    15: 1.15,  # For 15 min expiry, boost ATM vol by 15%
-    60: 1.05   # For 1 hour expiry, boost ATM vol by 5%
+    15: 1.15, # For 15 min expiry, boost ATM vol by 15%
+    60: 1.05 # For 1 hour expiry, boost ATM vol by 5%
     # Add other expiries if specific short-term boosts are desired
 }
+
 # Fallback multiplier if an expiry is not explicitly listed above (no adjustment)
 VOLATILITY_DEFAULT_SHORT_EXPIRY_ADJUSTMENT = 1.0
 
@@ -64,8 +77,8 @@ VOLATILITY_DEFAULT_SHORT_EXPIRY_ADJUSTMENT = 1.0
 # These parameters define the general shape of the smile/skew.
 # Positive CURVATURE creates a "smile" (higher vol for OTM/ITM).
 # Negative SKEW_FACTOR typically creates "reverse skew" (OTM puts > OTM calls IV), common in equity/crypto.
-VOLATILITY_SMILE_CURVATURE = 0.15  # Higher value = more pronounced smile. Example: 0.1 to 0.3
-VOLATILITY_SKEW_FACTOR = -0.10   # Example: -0.05 to -0.2 for crypto/equity.
+VOLATILITY_SMILE_CURVATURE = 0.15 # Higher value = more pronounced smile. Example: 0.1 to 0.3
+VOLATILITY_SKEW_FACTOR = -0.10 # Example: -0.05 to -0.2 for crypto/equity.
 
 # Bounds for the smile/skew multiplicative adjustment factor.
 # This prevents the smile/skew model from pushing strike-specific volatility to absurd levels
@@ -76,7 +89,6 @@ MAX_SMILE_ADJUSTMENT_FACTOR = 1.50 # Volatility for a strike won't exceed 150% o
 # GARCH and ML Volatility flags (can be enabled if respective components are implemented)
 VOLATILITY_GARCH_ENABLED = False # Set to True if GARCH models are integrated
 ML_VOL_TRAINING_INTERVAL = 500 # Example: Retrain ML vol model every 500 data points
-
 PRICE_CHANGE_THRESHOLD_FOR_BROADCAST = 0.0001 # Threshold for broadcasting price updates
 
 # === STRIKE GENERATION ===
@@ -85,13 +97,14 @@ STRIKE_RANGES_BY_EXPIRY = {
     15: {"num_itm": 7, "num_otm": 7, "step_pct": 0.005}, # Express - tight spacing
     60: {"num_itm": 10, "num_otm": 10, "step_pct": 0.01}, # Hourly - moderate spacing
     240: {"num_itm": 12, "num_otm": 12, "step_pct": 0.02}, # 4-Hour - wider spacing
-    480: {"num_itm": 15, "num_otm": 15, "step_pct": 0.03}  # 8-Hour - widest spacing
+    480: {"num_itm": 15, "num_otm": 15, "step_pct": 0.03} # 8-Hour - widest spacing
 }
+
 STRIKE_ROUNDING_NEAREST = 10 # Round strikes to nearest $10
 
-# === DATA FEED SETTINGS ===
-EXCHANGES_ENABLED = ["coinbase", "kraken", "okx"]
-PRIMARY_EXCHANGE = "coinbase"
+# === DATA FEED SETTINGS === (FIXED: Prioritize OKX)
+EXCHANGES_ENABLED = ["okx", "coinbase", "kraken"]  # ← FIXED: OKX first (most real-time)
+PRIMARY_EXCHANGE = "okx"                           # ← FIXED: Changed from coinbase to okx
 DATA_BROADCAST_INTERVAL_SECONDS = 1.0 # Interval at which price data is assumed to arrive/be processed
 PRICE_HISTORY_MAX_POINTS = 10000 # Max number of price points to store for volatility calculations
 
@@ -129,6 +142,7 @@ CORS_ORIGINS = [
     "http://127.0.0.1:3000",
     "https://preview--atticus-option-flow.lovable.app"
 ]
+
 API_STARTUP_TIMEOUT = 20
 WEBSOCKET_TIMEOUT_SECONDS = 30
 
@@ -178,4 +192,3 @@ for key, value in globals().copy().items():
                     globals()[key] = env_value
             except (ValueError, TypeError, json.JSONDecodeError) as e: # Added JSONDecodeError
                 print(f"Warning: Could not cast env var ATTICUS_{key}='{env_value}' to type {type(current_value)}. Error: {e}")
-

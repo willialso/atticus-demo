@@ -39,16 +39,36 @@ class DataFeedManager:
         self.price_callbacks.append(callback)
 
     def _get_ws_btc_prices(self):
-        """Aggregate latest BTC prices from all WebSocket clients."""
+        """Aggregate latest BTC prices from all WebSocket clients with freshness check."""
         sources = []
-        if coinbase_btc_price_info.get('price'):
-            sources.append(('Coinbase', coinbase_btc_price_info['price']))
-        if kraken_btc_price_info.get('price'):
-            sources.append(('Kraken', kraken_btc_price_info['price']))
-        okx_bid = okx_btc_price_info.get('bid')
-        okx_ask = okx_btc_price_info.get('ask')
-        if okx_bid and okx_ask:
-            sources.append(('OKX', (okx_bid + okx_ask) / 2))
+        current_time = time.time()
+        
+        # 1. PRIORITIZE OKX (most real-time and accurate)
+        if okx_btc_price_info.get('price'):
+            # Use 'price' field if available (from 'last' in okx_client)
+            last_update = okx_btc_price_info.get('last_update', 0)
+            if current_time - last_update < 60:  # Fresh data (< 60 seconds old)
+                sources.append(('OKX', okx_btc_price_info['price']))
+        elif okx_btc_price_info.get('bid') and okx_btc_price_info.get('ask'):
+            # Fallback to bid/ask average if 'price' not available
+            last_update = okx_btc_price_info.get('last_update', 0)
+            if current_time - last_update < 60:  # Fresh data
+                bid = okx_btc_price_info['bid']
+                ask = okx_btc_price_info['ask']
+                sources.append(('OKX', (bid + ask) / 2))
+        
+        # 2. Then Coinbase (if OKX not available)
+        if not sources and coinbase_btc_price_info.get('price'):
+            last_update = coinbase_btc_price_info.get('last_update_time', 0)
+            if current_time - last_update < 60:  # Fresh data
+                sources.append(('Coinbase', coinbase_btc_price_info['price']))
+        
+        # 3. Then Kraken (last resort)
+        if not sources and kraken_btc_price_info.get('price'):
+            last_update = kraken_btc_price_info.get('last_update_time', 0)
+            if current_time - last_update < 60:  # Fresh data
+                sources.append(('Kraken', kraken_btc_price_info['price']))
+        
         return sources
 
     def start(self) -> None:
@@ -84,6 +104,7 @@ class DataFeedManager:
                         timestamp=time.time(),
                         exchange=exchange_name
                     )
+                    
                     self.consolidated_price = real_price
                     self.last_real_price = real_price
                     self.latest_prices["real"] = price_data
