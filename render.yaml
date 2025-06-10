@@ -3,8 +3,8 @@ services:
     name: atticus-demo
     env: python
     buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
+      python -m pip install --upgrade pip setuptools wheel
+      pip install -e .
     startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHONPATH
