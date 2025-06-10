@@ -1,8 +1,13 @@
 services:
   - type: web
     name: atticus-demo
-    env: docker
-    dockerfilePath: ./Dockerfile
+    env: python
+    buildCommand: |
+      python -m pip install --upgrade pip setuptools wheel
+      pip install -e .
+    startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: PYTHONPATH
-        value: /app 
+        value: /opt/render/project/src 

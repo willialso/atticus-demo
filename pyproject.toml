@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "atticus-demo"
 version = "0.1.0"
 description = "Atricus Demo Application"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11.11,<3.12"
 dependencies = [
     "fastapi==0.104.1",
     "uvicorn==0.24.0",
