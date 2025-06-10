@@ -137,7 +137,9 @@ CORS_ORIGINS = [
     "http://127.0.0.1:3000",
     "https://preview--atticus-option-flow.lovable.app",
     "https://atticus-option-flow.lovable.app",
-    "https://atticus-demo.onrender.com"
+    "https://atticus-demo.onrender.com",
+    "https://atticus-demo-1.onrender.com",
+    "https://atticustrade.com"
 ]
 
 # WebSocket specific settings
