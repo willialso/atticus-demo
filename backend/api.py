@@ -9,6 +9,8 @@ import asyncio
 import time
 import logging
 import math
+import uuid
+import os
 
 # --- CORE IMPORTS ---
 from backend import config # Your main configuration file
@@ -72,6 +74,12 @@ class BlackScholesRequest(BaseModel):
     option_type: str = Field(..., pattern="^(call|put)$")
     risk_free_rate: Optional[float] = None
     volatility: Optional[float] = None
+
+# New Pydantic model for synthetic account updates
+class SyntheticAccountUpdate(BaseModel):
+    account_id: str
+    platform: str
+    positions: List[Dict]
 
 # --- FastAPI Application Setup ---
 app = FastAPI(
@@ -213,126 +221,107 @@ async def startup_event():
         app.state.data_feed_manager.add_price_callback(price_update_callback)
         app.state.data_feed_manager.start()
 
+        # Patch: Initialize pricing engine's current_price from data feed manager if available
+        initial_price = app.state.data_feed_manager.get_current_price()
+        if initial_price and initial_price > 0:
+            app.state.pricing_engine.current_price = initial_price
+            logger.info(f"Patched: Set pricing engine current_price to {initial_price}")
+
         app.state.ws_manager = ws_manager_global_instance # Make ws_manager accessible via app.state
+
+        # Initialize sandbox service
+        from sandbox.api.websocket_extension import SandboxService
+        app.state.sandbox_service = SandboxService(
+            data_hub=app.state.data_feed_manager,
+            pricing_engine=app.state.pricing_engine
+        )
+        app.state.sandbox_service.start()
+        logger.info("Sandbox service initialized and started.")
 
         # Pass app instance to background tasks if they need access to app.state
         asyncio.create_task(background_market_updates(app))
         asyncio.create_task(background_position_updates(app))
         
-        logger.info(f"✅ API {config.PLATFORM_NAME} started successfully with all components on app.state.")
-        api_startup_complete_event.set()
-        logger.info("✅ API startup_complete_event has been set.")
+        logger.info("✅ API startup complete.")
+    except Exception as e:
+        logger.error(f"❌ API startup error: {e}", exc_info=True)
+        raise
 
-    except Exception as e_startup:
-        logger.error(f"❌ API Startup failed critically: {e_startup}", exc_info=True)
-        api_startup_complete_event.set() # Also set event on failure
-        raise RuntimeError(f"API Startup failed: {e_startup}")
-
-# --- Background Tasks (now accept app instance) ---
+# --- Background Tasks ---
 async def background_market_updates(app_instance: FastAPI):
-    last_broadcast_price = None; update_counter = 0
-    loop_interval_seconds = 0.1 
-    broadcast_check_loops = int(config.DATA_BROADCAST_INTERVAL_SECONDS / loop_interval_seconds if config.DATA_BROADCAST_INTERVAL_SECONDS >= loop_interval_seconds else 1)
-    await asyncio.sleep(2) 
+    """Background task to update market data and broadcast to WebSocket clients."""
     logger.info("Background market updates task started.")
-    
-    price_update_callback_ref = _handle_price_update_sync_factory(app_instance) # Get ref to the latest_price attribute
-
     while True:
         try:
-            current_price_for_broadcast = 0.0
-            local_pricing_engine = getattr(app_instance.state, 'pricing_engine', None)
-            local_ws_manager = getattr(app_instance.state, 'ws_manager', None)
+            await asyncio.sleep(1.0)  # Update every second
+            data_feed_manager = getattr(app_instance.state, 'data_feed_manager', None)
+            if not data_feed_manager or not data_feed_manager.is_running:
+                continue
 
-            if local_pricing_engine and hasattr(local_pricing_engine, 'current_price') and local_pricing_engine.current_price > 0:
-                current_price_for_broadcast = local_pricing_engine.current_price
-            elif hasattr(price_update_callback_ref, 'latest_price'): 
-                current_price_for_broadcast = price_update_callback_ref.latest_price
-
-            if current_price_for_broadcast > 0 and local_ws_manager:
-                should_broadcast_flag = False; price_diff = 0.0
-                price_change_threshold_val = getattr(config, 'PRICE_CHANGE_THRESHOLD_FOR_BROADCAST', 0.0001)
-                
-                if last_broadcast_price is None or \
-                   (last_broadcast_price > 0 and abs(current_price_for_broadcast - last_broadcast_price) / last_broadcast_price > price_change_threshold_val):
-                    should_broadcast_flag = True
-                
-                if last_broadcast_price is not None:
-                    price_diff = current_price_for_broadcast - last_broadcast_price
-                
-                update_counter = (update_counter + 1) % broadcast_check_loops
-                if update_counter == 0: 
-                    should_broadcast_flag = True
-
-                if should_broadcast_flag:
-                    await local_ws_manager.broadcast_safe({
-                        "type": "price_update",
-                        "data": {"price": current_price_for_broadcast, "change": price_diff, "timestamp": time.time()}
+            current_price = data_feed_manager.get_current_price()
+            if current_price and current_price > 0:
+                ws_manager = getattr(app_instance.state, 'ws_manager', None)
+                if ws_manager:
+                    await ws_manager.broadcast_safe({
+                        "type": "market_update",
+                        "data": {
+                            "price": current_price,
+                            "timestamp": time.time()
+                        }
                     })
-                    last_broadcast_price = current_price_for_broadcast
-        except Exception as e_bg_market:
-            logger.error(f"❌ Background market update task error: {e_bg_market}", exc_info=True)
-        await asyncio.sleep(loop_interval_seconds)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in background market updates: {e}", exc_info=True)
 
 async def background_position_updates(app_instance: FastAPI):
-    await asyncio.sleep(3)
+    """Background task to update position data and broadcast to WebSocket clients."""
     logger.info("Background position updates task started.")
-    
-    price_update_callback_ref = _handle_price_update_sync_factory(app_instance)
-
     while True:
         try:
-            local_trade_executor = getattr(app_instance.state, 'trade_executor', None)
-            local_pricing_engine = getattr(app_instance.state, 'pricing_engine', None)
-            local_ws_manager = getattr(app_instance.state, 'ws_manager', None)
+            await asyncio.sleep(5.0)  # Update every 5 seconds
+            trade_executor = getattr(app_instance.state, 'trade_executor', None)
+            if not trade_executor:
+                continue
 
-            current_btc_price_for_marks = 0.0
-            if local_pricing_engine and hasattr(local_pricing_engine, 'current_price') and local_pricing_engine.current_price > 0:
-                current_btc_price_for_marks = local_pricing_engine.current_price
-            elif hasattr(price_update_callback_ref, 'latest_price'): 
-                current_btc_price_for_marks = price_update_callback_ref.latest_price
+            for user_id, account in trade_executor.user_accounts.items():
+                ws_manager = getattr(app_instance.state, 'ws_manager', None)
+                if ws_manager:
+                    await ws_manager.broadcast_safe({
+                        "type": "position_update",
+                        "data": {
+                            "user_id": user_id,
+                            "portfolio": account.get_portfolio_summary()
+                        }
+                    }, user_id=user_id)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in background position updates: {e}", exc_info=True)
 
-            if local_trade_executor and current_btc_price_for_marks > 0:
-                local_trade_executor.update_position_marks(current_btc_price_for_marks) 
-                settled_list = local_trade_executor.check_and_settle_expired_options()
-                if settled_list and local_ws_manager:
-                    for settled_pos in settled_list:
-                        await local_ws_manager.broadcast_safe({
-                            "type": "position_settled",
-                            "data": {"position_id": settled_pos.position_id, "final_pnl": settled_pos.unrealized_pnl}
-                        }, user_id=settled_pos.user_id)
-        except Exception as e_bg_pos:
-            logger.error(f"❌ Background position update task error: {e_bg_pos}", exc_info=True)
-        await asyncio.sleep(1.0) 
-
-# --- API Endpoints (now use app.state for components) ---
+# --- API Endpoints ---
 @app.get("/")
 async def health_check_endpoint(request: Request):
-    current_price_val = 0.0
-    local_pricing_engine = getattr(request.app.state, 'pricing_engine', None)
-    price_update_callback_ref = _handle_price_update_sync_factory(request.app)
-
-    if local_pricing_engine and hasattr(local_pricing_engine, 'current_price') and local_pricing_engine.current_price > 0:
-        current_price_val = local_pricing_engine.current_price
-    elif hasattr(price_update_callback_ref, 'latest_price'):
-        current_price_val = price_update_callback_ref.latest_price
-        
-    return {"name": config.PLATFORM_NAME, "version": config.VERSION, "status": "operational",
-            "timestamp": time.time(), "current_btc_price_api": current_price_val}
+    """Health check endpoint."""
+    return {"status": "ok", "version": config.VERSION}
 
 @app.post("/blackscholes/calculate")
 async def calculate_black_scholes_basic_endpoint(request_data: BlackScholesRequest): # Changed param name
-    r_val = request_data.risk_free_rate if request_data.risk_free_rate is not None else config.RISK_FREE_RATE
-    sigma_val = request_data.volatility if request_data.volatility is not None else config.DEFAULT_VOLATILITY_FOR_BASIC_BS
+    """Calculate basic Black-Scholes option price."""
     try:
-        premium_calc, greeks_calc = AdvancedPricingEngine.black_scholes_with_greeks(
-            S=request_data.current_price, K=request_data.strike_price, T=request_data.time_to_expiry_years,
-            r=r_val, sigma=sigma_val, option_type=request_data.option_type
+        pricing_engine = getattr(request.app.state, 'pricing_engine', None)
+        if not pricing_engine:
+            raise HTTPException(status_code=503, detail="Pricing engine not available.")
+        
+        price = pricing_engine.calculate_option_price(
+            request_data.current_price,
+            request_data.strike_price,
+            request_data.time_to_expiry_years,
+            request_data.volatility or pricing_engine.current_volatility,
+            request_data.option_type,
+            request_data.risk_free_rate
         )
-        inputs_echo = request_data.dict()
-        inputs_echo['risk_free_rate'] = r_val
-        inputs_echo['volatility'] = sigma_val
-        return {"premium_usd_per_btc": premium_calc, "greeks": greeks_calc, "inputs_used": inputs_echo}
+        return {"price": price}
     except Exception as e_bs_calc:
         logger.error(f"Basic Black-Scholes calculation error: {e_bs_calc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Calculation error: {str(e_bs_calc)}")
@@ -521,7 +510,6 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
         logger.info(f"Closing WebSocket connection for: {connection_id}")
         if local_ws_manager:
             await local_ws_manager.disconnect(websocket, user_id)
-# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 # --- Main Execution Guard (if api.py is run directly) ---
 if __name__ == "__main__":
@@ -534,3 +522,149 @@ if __name__ == "__main__":
         log_level=config.LOG_LEVEL.lower(), 
         reload=config.DEMO_MODE 
     )
+
+# New endpoint to update synthetic account information
+@app.post("/sandbox/update-account")
+async def update_synthetic_account_endpoint(account_update: SyntheticAccountUpdate):
+    """Update synthetic account information."""
+    try:
+        # Ensure the directory exists
+        os.makedirs('sandbox/config', exist_ok=True)
+        
+        # Initialize file if it doesn't exist
+        if not os.path.exists('sandbox/config/synthetic_accounts.json'):
+            with open('sandbox/config/synthetic_accounts.json', 'w') as f:
+                json.dump({"accounts": []}, f, indent=2)
+        
+        # Load current accounts
+        with open('sandbox/config/synthetic_accounts.json', 'r') as f:
+            data = json.load(f)
+        
+        # Update the account
+        account_updated = False
+        for acc in data['accounts']:
+            if acc['account_id'] == account_update.account_id:
+                acc['platform'] = account_update.platform
+                acc['positions'] = account_update.positions
+                account_updated = True
+                break
+        
+        if not account_updated:
+            # If account not found, add it
+            data['accounts'].append(account_update.dict())
+        
+        # Save updated accounts
+        with open('sandbox/config/synthetic_accounts.json', 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        # Update the sandbox service if it exists
+        sandbox_service = getattr(app.state, 'sandbox_service', None)
+        if sandbox_service and hasattr(sandbox_service, 'position_manager'):
+            sandbox_service.position_manager.load_accounts('sandbox/config/synthetic_accounts.json')
+        
+        return {"success": True, "message": f"Account {account_update.account_id} updated successfully."}
+    except Exception as e:
+        logger.error(f"Error updating synthetic account: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update account: {str(e)}")
+
+@app.post("/sandbox/trades/execute")
+async def execute_sandbox_trade_endpoint(trade_request: TradeRequest, request_obj: Request, background_tasks: BackgroundTasks):
+    """Execute a trade in the sandbox environment."""
+    local_sandbox_service = getattr(request_obj.app.state, 'sandbox_service', None)
+    local_ws_manager = getattr(request_obj.app.state, 'ws_manager', None)
+    local_pricing_engine = getattr(request_obj.app.state, 'pricing_engine', None)
+
+    if not local_sandbox_service:
+        raise HTTPException(status_code=503, detail="Sandbox service not available")
+    if not local_pricing_engine or not local_pricing_engine.current_price or local_pricing_engine.current_price <= 0:
+        raise HTTPException(status_code=503, detail="Market price not available")
+
+    # Validate quantity and strike
+    if trade_request.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Invalid quantity")
+    if trade_request.strike <= 0:
+        raise HTTPException(status_code=400, detail="Invalid strike price")
+
+    try:
+        # Convert trade request to sandbox format
+        sandbox_trade_data = {
+            "user_id": trade_request.user_id,
+            "symbol": f"BTC-{trade_request.option_type.upper()}",
+            "quantity": trade_request.quantity,
+            "side": trade_request.side.lower(),
+            "strike": trade_request.strike,
+            "expiry_minutes": trade_request.expiry_minutes,
+            "option_type": trade_request.option_type.lower()
+        }
+
+        # Execute trade in sandbox
+        success, message, result = await local_sandbox_service.execute_sandbox_trade(sandbox_trade_data)
+        trade_id = f"sandbox_{uuid.uuid4().hex[:8]}"
+        status = "success" if success else "failed"
+        if not success:
+            raise HTTPException(status_code=400, detail=message)
+
+        # Broadcast trade execution to connected clients
+        if local_ws_manager:
+            # Broadcast to all clients for sandbox trades
+            background_tasks.add_task(local_ws_manager.broadcast_safe, {
+                "type": "sandbox_trade_executed",
+                "data": {
+                    "trade_id": trade_id,
+                    "status": status,
+                    "message": message,
+                    "position": result["position"],
+                    "portfolio_summary": result["portfolio_summary"],
+                    "risk_analysis": result["risk_analysis"],
+                    "hedging_plan": result["hedging_plan"]
+                }
+            })
+
+            # Also send a specific update to the user who executed the trade
+            background_tasks.add_task(local_ws_manager.broadcast_safe, {
+                "type": "trade_executed",
+                "data": {
+                    "order_id": trade_id,
+                    "symbol": sandbox_trade_data["symbol"],
+                    "premium": 0.0,  # Sandbox trades don't have real premiums
+                    "position_id": result["position"].position_id if hasattr(result["position"], "position_id") else None
+                }
+            }, user_id=trade_request.user_id)
+
+        return {
+            "trade_id": trade_id,
+            "status": status,
+            "message": message,
+            "position": result["position"],
+            "portfolio_summary": result["portfolio_summary"],
+            "risk_analysis": result["risk_analysis"],
+            "hedging_plan": result["hedging_plan"]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Sandbox trade execution error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Sandbox trade execution failed: {str(e)}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources when the application shuts down."""
+    logger.info("Shutting down API components...")
+    try:
+        # Stop sandbox service if it exists
+        sandbox_service = getattr(app.state, 'sandbox_service', None)
+        if sandbox_service:
+            sandbox_service.stop()
+            logger.info("Sandbox service stopped.")
+
+        # Stop data feed manager if it exists
+        data_feed_manager = getattr(app.state, 'data_feed_manager', None)
+        if data_feed_manager:
+            data_feed_manager.stop()
+            logger.info("Data feed manager stopped.")
+
+        logger.info("✅ API shutdown complete.")
+    except Exception as e:
+        logger.error(f"❌ API shutdown error: {e}", exc_info=True)
+        raise

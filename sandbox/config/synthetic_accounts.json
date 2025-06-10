@@ -1,0 +1,56 @@
+{
+  "accounts": [
+    {
+      "account_id": "okx_leveraged_long",
+      "platform": "okx",
+      "positions": [
+        {
+          "symbol": "BTC-USDT-PERP",
+          "size": 4.0,
+          "entry_price": 108000,
+          "side": "long",
+          "leverage": 25.0,
+          "order_type": "taker"
+        }
+      ]
+    },
+    {
+      "account_id": "kraken_hedger_short",
+      "platform": "kraken",
+      "positions": [
+        {
+          "symbol": "BTC/USD-PERP",
+          "size": -1.0,
+          "entry_price": 107000,
+          "side": "short",
+          "leverage": 10.0,
+          "order_type": "maker"
+        }
+      ]
+    },
+    {
+      "account_id": "test_account_1",
+      "platform": "test_platform",
+      "positions": [
+        {
+          "symbol": "BTC-USD",
+          "size": 1.0,
+          "entry_price": 50000.0,
+          "side": "long",
+          "leverage": 1.0,
+          "order_type": "market"
+        }
+      ]
+    },
+    {
+      "account_id": "new_account_1",
+      "platform": "new_platform",
+      "positions": []
+    },
+    {
+      "account_id": "test_user",
+      "platform": "sandbox",
+      "positions": []
+    }
+  ]
+}

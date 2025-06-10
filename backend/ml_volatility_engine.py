@@ -248,7 +248,7 @@ class MLVolatilityEngine(AdvancedVolatilityEngine):
             self.train_models()
         
         # Use appropriate model based on expiry
-        model_key = 'short_term' if expiry_minutes <= 60 else 'medium_term'
+        model_key = 'short_term' if expiry_minutes <= 120 else 'medium_term'  # Updated threshold to 2 hours
         model = self.models[model_key]
         
         if model is None:
