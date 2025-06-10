@@ -36,40 +36,63 @@ class MarketDataRequest(BaseModel):
 @app.get("/market/volatility-surface")
 async def get_volatility_surface():
     """Get volatility surface data for all expiries and strikes."""
-    if not pricing_engine:
-        raise HTTPException(status_code=503, detail="Pricing engine not available")
-    
     try:
-        # Get volatility metrics
-        vol_metrics = pricing_engine.vol_engine.get_volatility_metrics()
+        pricing_engine = getattr(app.state, 'pricing_engine', None)
+        if not pricing_engine:
+            raise HTTPException(status_code=503, detail="Pricing engine not available")
         
-        # Get all option chains
-        all_chains = pricing_engine.generate_all_chains()
-        
-        surface_data = {}
-        for expiry_minutes, chain in all_chains.items():
-            surface_data[expiry_minutes] = {
-                "volatility_used": chain.volatility_used,
-                "strikes_and_ivs": [
-                    {
-                        "strike": option.strike,
-                        "implied_vol": option.implied_vol,
-                        "option_type": option.option_type,
-                        "moneyness": option.moneyness
-                    }
-                    for option in chain.calls + chain.puts
-                ]
+        # Get volatility metrics with error handling
+        try:
+            vol_metrics = pricing_engine.vol_engine.get_volatility_metrics()
+        except Exception as e:
+            logger.error(f"Error getting volatility metrics: {e}")
+            vol_metrics = {
+                "current_volatility": 0.0,
+                "historical_volatility": 0.0,
+                "implied_volatility": 0.0
             }
         
+        # Get all option chains with error handling
+        try:
+            all_chains = pricing_engine.generate_all_chains()
+        except Exception as e:
+            logger.error(f"Error generating option chains: {e}")
+            raise HTTPException(status_code=500, detail="Failed to generate option chains")
+        
+        # Process the chains with null checks
+        surface_data = {}
+        for expiry_minutes, chain in all_chains.items():
+            if not chain:
+                continue
+                
+            surface_data[str(expiry_minutes)] = {
+                "volatility_used": getattr(chain, 'volatility_used', 0.0),
+                "strikes_and_ivs": []
+            }
+            
+            # Process calls and puts with null checks
+            for option in (chain.calls or []) + (chain.puts or []):
+                if not option:
+                    continue
+                    
+                surface_data[str(expiry_minutes)]["strikes_and_ivs"].append({
+                    "strike": getattr(option, 'strike', 0.0),
+                    "implied_vol": getattr(option, 'implied_vol', 0.0),
+                    "option_type": getattr(option, 'option_type', 'unknown'),
+                    "moneyness": getattr(option, 'moneyness', 0.0)
+                })
+        
         return {
-            "volatility_metrics": vol_metrics.__dict__,
+            "volatility_metrics": vol_metrics,
             "volatility_surface": surface_data,
             "timestamp": time.time()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Volatility surface error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Volatility surface error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate volatility surface: {str(e)}")
 
 @app.get("/market/sentiment")
 async def get_market_sentiment():
@@ -163,42 +186,39 @@ async def execute_advanced_trade(request: AdvancedTradeRequest):
 @app.get("/users/{user_id}/portfolio/analysis")
 async def get_portfolio_analysis(user_id: str, analysis_type: str = "risk"):
     """Get detailed portfolio analysis."""
-    if not trade_executor:
-        raise HTTPException(status_code=503, detail="Trade executor not available")
-    
     try:
-        portfolio = trade_executor.get_user_portfolio_summary(user_id)
+        trade_executor = getattr(app.state, 'trade_executor', None)
+        if not trade_executor:
+            raise HTTPException(status_code=503, detail="Trade executor not available")
         
-        if analysis_type == "risk":
-            # Calculate portfolio risk metrics
-            analysis = {
-                "net_delta": sum(pos.get("current_delta", 0) for pos in portfolio.get("active_positions", [])),
-                "total_exposure": portfolio.get("portfolio_value_usd", 0),
-                "var_95": 0,  # Would calculate Value at Risk
-                "max_loss": sum(pos.get("entry_price", 0) * pos.get("quantity", 0) 
-                              for pos in portfolio.get("active_positions", [])),
-                "risk_score": "Medium"  # Would calculate based on portfolio composition
-            }
-        elif analysis_type == "performance":
-            # Calculate performance metrics
-            analysis = {
-                "total_return": portfolio.get("total_realized_pnl", 0),
-                "roi": 0,  # Would calculate ROI
-                "sharpe_ratio": 0,  # Would calculate Sharpe ratio
-                "win_rate": 0,  # Would calculate win rate from trade history
-                "avg_trade_duration": "15 minutes"  # Based on your option expiries
-            }
-        elif analysis_type == "greeks":
-            # Calculate portfolio Greeks
-            analysis = {
-                "total_delta": sum(pos.get("current_delta", 0) for pos in portfolio.get("active_positions", [])),
-                "total_gamma": 0,  # Would sum up gamma
-                "total_theta": 0,  # Would sum up theta
-                "total_vega": 0,   # Would sum up vega
-                "delta_hedging_recommendation": "Neutral"
-            }
-        else:
-            raise HTTPException(status_code=400, detail="Invalid analysis type")
+        # Validate analysis type
+        valid_analysis_types = ["risk", "performance", "greeks"]
+        if analysis_type not in valid_analysis_types:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid analysis type. Must be one of: {', '.join(valid_analysis_types)}"
+            )
+        
+        # Get portfolio data with error handling
+        try:
+            portfolio = trade_executor.get_user_portfolio_summary(user_id)
+            if not portfolio:
+                raise HTTPException(status_code=404, detail=f"Portfolio not found for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error getting portfolio summary: {e}")
+            raise HTTPException(status_code=500, detail="Failed to retrieve portfolio data")
+        
+        # Calculate analysis based on type
+        try:
+            if analysis_type == "risk":
+                analysis = calculate_risk_metrics(portfolio)
+            elif analysis_type == "performance":
+                analysis = calculate_performance_metrics(portfolio)
+            else:  # greeks
+                analysis = calculate_greek_metrics(portfolio)
+        except Exception as e:
+            logger.error(f"Error calculating {analysis_type} metrics: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to calculate {analysis_type} metrics")
         
         return {
             "user_id": user_id,
@@ -207,9 +227,109 @@ async def get_portfolio_analysis(user_id: str, analysis_type: str = "risk"):
             "timestamp": time.time()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Portfolio analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Portfolio analysis error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+def calculate_risk_metrics(portfolio):
+    """Calculate risk metrics for the portfolio."""
+    try:
+        active_positions = portfolio.get("active_positions", [])
+        return {
+            "net_delta": sum(pos.get("current_delta", 0) for pos in active_positions),
+            "total_exposure": portfolio.get("portfolio_value_usd", 0),
+            "var_95": calculate_var_95(portfolio),
+            "max_loss": sum(pos.get("entry_price", 0) * pos.get("quantity", 0) for pos in active_positions),
+            "risk_score": calculate_risk_score(portfolio)
+        }
+    except Exception as e:
+        logger.error(f"Error calculating risk metrics: {e}")
+        return {
+            "net_delta": 0,
+            "total_exposure": 0,
+            "var_95": 0,
+            "max_loss": 0,
+            "risk_score": "Unknown"
+        }
+
+def calculate_performance_metrics(portfolio):
+    """Calculate performance metrics for the portfolio."""
+    try:
+        return {
+            "total_return": portfolio.get("total_realized_pnl", 0),
+            "roi": calculate_roi(portfolio),
+            "sharpe_ratio": calculate_sharpe_ratio(portfolio),
+            "win_rate": calculate_win_rate(portfolio),
+            "avg_trade_duration": calculate_avg_trade_duration(portfolio)
+        }
+    except Exception as e:
+        logger.error(f"Error calculating performance metrics: {e}")
+        return {
+            "total_return": 0,
+            "roi": 0,
+            "sharpe_ratio": 0,
+            "win_rate": 0,
+            "avg_trade_duration": "Unknown"
+        }
+
+def calculate_greek_metrics(portfolio):
+    """Calculate Greek metrics for the portfolio."""
+    try:
+        active_positions = portfolio.get("active_positions", [])
+        return {
+            "total_delta": sum(pos.get("current_delta", 0) for pos in active_positions),
+            "total_gamma": sum(pos.get("current_gamma", 0) for pos in active_positions),
+            "total_theta": sum(pos.get("current_theta", 0) for pos in active_positions),
+            "total_vega": sum(pos.get("current_vega", 0) for pos in active_positions),
+            "delta_hedging_recommendation": calculate_delta_hedging_recommendation(portfolio)
+        }
+    except Exception as e:
+        logger.error(f"Error calculating Greek metrics: {e}")
+        return {
+            "total_delta": 0,
+            "total_gamma": 0,
+            "total_theta": 0,
+            "total_vega": 0,
+            "delta_hedging_recommendation": "Unknown"
+        }
+
+# Helper functions for metric calculations
+def calculate_var_95(portfolio):
+    """Calculate Value at Risk at 95% confidence level."""
+    # Implementation would go here
+    return 0
+
+def calculate_risk_score(portfolio):
+    """Calculate risk score based on portfolio composition."""
+    # Implementation would go here
+    return "Medium"
+
+def calculate_roi(portfolio):
+    """Calculate Return on Investment."""
+    # Implementation would go here
+    return 0
+
+def calculate_sharpe_ratio(portfolio):
+    """Calculate Sharpe ratio."""
+    # Implementation would go here
+    return 0
+
+def calculate_win_rate(portfolio):
+    """Calculate win rate from trade history."""
+    # Implementation would go here
+    return 0
+
+def calculate_avg_trade_duration(portfolio):
+    """Calculate average trade duration."""
+    # Implementation would go here
+    return "15 minutes"
+
+def calculate_delta_hedging_recommendation(portfolio):
+    """Calculate delta hedging recommendation."""
+    # Implementation would go here
+    return "Neutral"
 
 @app.get("/platform/system-status")
 async def get_system_status():

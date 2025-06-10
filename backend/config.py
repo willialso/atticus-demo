@@ -133,11 +133,17 @@ MARGIN_REQUIREMENT_MULTIPLIER = 1.5
 API_PORT = 8000
 API_HOST = "localhost"
 CORS_ORIGINS = [
-    "*", # Allow all for local development, restrict in production
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://preview--atticus-option-flow.lovable.app"
+    "https://preview--atticus-option-flow.lovable.app",
+    "https://atticus-option-flow.lovable.app",
+    "https://atticus-demo.onrender.com"
 ]
+
+# WebSocket specific settings
+WS_PING_INTERVAL = 20  # seconds
+WS_PING_TIMEOUT = 20   # seconds
+WS_MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB
 
 API_STARTUP_TIMEOUT = 20
 WEBSOCKET_TIMEOUT_SECONDS = 30

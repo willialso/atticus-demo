@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import math
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from scipy.stats import norm
 
 from backend import config
@@ -32,6 +32,7 @@ class OptionQuote:
     rho: float  # Scaled for contract size (per 1% rate change, USD value change)
     implied_vol: float # Annualized, strike-specific volatility used for this quote's calculation
     moneyness: str # "ITM", "ATM", "OTM"
+    greeks: dict = field(default_factory=dict)
 
     def dict(self):
         return asdict(self)
@@ -316,7 +317,8 @@ class AdvancedPricingEngine:
                         theta=round(scaled_greeks_values["theta"], 4), vega=round(scaled_greeks_values["vega"], 4),
                         rho=round(scaled_greeks_values["rho"], 4),
                         implied_vol=strike_specific_sigma, # Store the strike-specific sigma
-                        moneyness=option_moneyness
+                        moneyness=option_moneyness,
+                        greeks=scaled_greeks_values.copy() # Always include greeks
                     )
                     if option_contract_type == "call": call_quotes_list.append(option_quote_obj)
                     else: put_quotes_list.append(option_quote_obj)

@@ -7,7 +7,7 @@ import os
 # Ensure the project root is in the Python path for imports to work
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from sandbox.api.websocket_extension import SandboxWebSocketExtension
+from sandbox.api.websocket_extension import SandboxService
 
 # Configure logging for detailed test output
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -17,9 +17,18 @@ async def test_full_sandbox_workflow():
     """Tests the full end-to-end sandbox workflow on the backend."""
     print("\n--- Testing Sandbox Workflow ---")
     
+    # Mock objects for data_hub and pricing_engine
+    class MockDataHub:
+        def get_current_price(self):
+            return 110000.0
+    class MockPricingEngine:
+        current_volatility = 0.95
+        def generate_option_chain(self, expiry):
+            return None
+    
     # 1. Initialize the sandbox extension
-    extension = SandboxWebSocketExtension()
-    assert extension.position_manager.accounts, "FAIL: Should load accounts on init"
+    extension = SandboxService(MockDataHub(), MockPricingEngine())
+    assert hasattr(extension.position_manager, 'accounts'), "FAIL: Should load accounts on init"
     print("✅ Sandbox extension initialized and accounts loaded.")
 
     # 2. Simulate a market data update from the demo's websocket

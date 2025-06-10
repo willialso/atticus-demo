@@ -564,59 +564,81 @@ async def main():
     backend = AtticusBackend(app_instance=fastapi_app_instance)
     backend_instance_for_shutdown = backend 
 
-    uvicorn_config = uvicorn.Config("backend.api:app", host=config.API_HOST, port=config.API_PORT, reload=config.DEMO_MODE, log_level=config.LOG_LEVEL.lower())
+    uvicorn_config = uvicorn.Config(
+        "backend.api:app", 
+        host=config.API_HOST, 
+        port=config.API_PORT, 
+        reload=config.DEMO_MODE, 
+        log_level=config.LOG_LEVEL.lower(),
+        lifespan="on"
+    )
     server = uvicorn.Server(uvicorn_config)
 
     async def start_atticus_backend_logic_wrapper(backend_to_start):
         """Wrapper waits for API startup before starting the main logic."""
         logger.info("AtticusBackend logic waiting for API startup to complete...")
         try:
-            await asyncio.wait_for(api_startup_complete_event.wait(), timeout=config.API_STARTUP_TIMEOUT)
+            # Wait for API startup with a shorter timeout
+            await asyncio.wait_for(api_startup_complete_event.wait(), timeout=10)
             logger.info("API startup complete event received, starting main logic.")
             await backend_to_start.start()
         except asyncio.TimeoutError:
-            logger.error(f"Timeout waiting for API startup complete event after {config.API_STARTUP_TIMEOUT}s. AtticusBackend logic will not start.")
+            logger.error("Timeout waiting for API startup complete event after 10s. AtticusBackend logic will not start.")
         except RuntimeError as e:
-             logger.error(f"RuntimeError during AtticusBackend startup: {e}. AtticusBackend logic will not start.")
+            logger.error(f"RuntimeError during AtticusBackend startup: {e}. AtticusBackend logic will not start.")
         except Exception as e:
             logger.error(f"Unexpected error starting AtticusBackend logic: {e}", exc_info=True)
     
-    api_server_task = asyncio.create_task(server.serve())
-    atticus_logic_task = asyncio.create_task(start_atticus_backend_logic_wrapper(backend))
+    # Create and name tasks
+    api_server_task = asyncio.create_task(server.serve(), name="UvicornAPIServerTask")
+    atticus_logic_task = asyncio.create_task(start_atticus_backend_logic_wrapper(backend), name="AtticusBackendLogicTask")
 
     try:
-        done, pending = await asyncio.wait({api_server_task, atticus_logic_task}, return_when=asyncio.FIRST_COMPLETED)
+        # Wait for either task to complete
+        done, pending = await asyncio.wait(
+            {api_server_task, atticus_logic_task}, 
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # Log task completion status
         for task in done:
             task_name = task.get_name() if hasattr(task, 'get_name') else "Unknown Task"
             if task.exception():
                 logger.error(f"Task '{task_name}' completed with an error: {task.exception()}", exc_info=task.exception())
             else:
                 logger.info(f"Task '{task_name}' completed normally.")
+        
+        # Cancel pending tasks
         for task in pending:
             task_name = task.get_name() if hasattr(task, 'get_name') else "Unknown Task"
             logger.info(f"Cancelling pending task: '{task_name}'")
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    logger.info(f"Task '{task_name}' was successfully cancelled.")
-                except Exception as e_cancel:
-                    logger.error(f"Exception while awaiting cancellation of task '{task_name}': {e_cancel}")
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                logger.info(f"Task '{task_name}' was successfully cancelled.")
+            except Exception as e_cancel:
+                logger.error(f"Exception while awaiting cancellation of task '{task_name}': {e_cancel}")
+
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user (main.py via KeyboardInterrupt).")
     except Exception as e:
         logger.error(f"Application error in main.py's concurrent execution: {e}", exc_info=True)
     finally:
         logger.info("Main.py initiating shutdown sequence...")
+        
+        # Stop AtticusBackend if it's running
         if backend_instance_for_shutdown and backend_instance_for_shutdown.is_running:
+            logger.info("Stopping AtticusBackend...")
             await backend_instance_for_shutdown.stop()
         else:
             logger.info("AtticusBackend was not running or already stopped/failed to start.")
+
+        # Handle Uvicorn server shutdown
         if not api_server_task.done():
             logger.info("Attempting to trigger Uvicorn server shutdown...")
             if hasattr(server, 'handle_exit') and callable(getattr(server, 'handle_exit')):
-                 server.handle_exit(sig=signal.SIGINT, frame=None)
+                server.handle_exit(sig=signal.SIGINT, frame=None)
             else:
                 api_server_task.cancel()
             try:
@@ -627,13 +649,26 @@ async def main():
                 logger.error(f"Error during explicit Uvicorn server shutdown: {e_server_shutdown}")
         else:
             logger.info("Uvicorn server task already completed.")
+        
+        # Ensure all tasks are cancelled
+        for task in asyncio.all_tasks():
+            if task is not asyncio.current_task():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.error(f"Error cancelling task during shutdown: {e}")
+        
         logger.info("Main.py shutdown sequence complete.")
 
 if __name__ == "__main__":
-    """
-    This ensures the main() function with all the concurrent task logic actually runs.
-    """
     try:
         asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Application terminated by user (KeyboardInterrupt).")
     except Exception as e_outer_main:
-        print(f"CRITICAL UNHANDLED ERROR in main: {e_outer_main}")
+        logger.critical(f"CRITICAL UNHANDLED ERROR in main: {e_outer_main}", exc_info=True)
+    finally:
+        logger.info("Application shutdown complete.")

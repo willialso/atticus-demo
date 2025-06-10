@@ -22,6 +22,9 @@ from backend.trade_executor import TradeExecutor, TradeOrder, OrderSide, UserAcc
 from backend.data_feed_manager import DataFeedManager
 from backend.utils import setup_logger # Your logging utility
 
+# Add this import for SandboxService
+from sandbox.api.websocket_extension import SandboxService
+
 # Conditional imports
 try:
     from backend.rl_hedger import RLHedger
@@ -191,61 +194,61 @@ def _handle_price_update_sync_factory(app_instance: FastAPI):
 # --- FastAPI Startup Event ---
 @app.on_event("startup")
 async def startup_event():
-    logger.info(f"🚀 API Initializing {config.PLATFORM_NAME} v{config.VERSION} Components...")
+    """Initialize components when the application starts up."""
+    logger.info("Starting up API components...")
     try:
-        # Initialize and assign components to app.state
-        app.state.vol_engine_global_instance = AdvancedVolatilityEngine()
-        app.state.alpha_gen_global_instance = AlphaSignalGenerator()
+        # Initialize WebSocket manager
+        app.state.ws_manager = SimpleWebSocketManager()
+        logger.info("✅ WebSocket manager initialized.")
+
+        # Initialize pricing engine
         app.state.pricing_engine = AdvancedPricingEngine(
-            volatility_engine=app.state.vol_engine_global_instance,
-            alpha_signal_generator=app.state.alpha_gen_global_instance
+            volatility_engine=AdvancedVolatilityEngine(),
+            alpha_signal_generator=AlphaSignalGenerator()
         )
+        logger.info("✅ Pricing engine initialized.")
 
-        if RL_HEDGER_AVAILABLE and getattr(config, 'USE_RL_HEDGER', False):
-            try:
-                app.state.hedger = RLHedger(pricing_engine=app.state.pricing_engine)
-                logger.info("Using RL-enhanced hedger.")
-            except Exception as e_rl:
-                logger.warning(f"Failed to initialize RL hedger: {e_rl}. Falling back to PortfolioHedger.")
-                app.state.hedger = PortfolioHedger(pricing_engine=app.state.pricing_engine)
-        else:
-            app.state.hedger = PortfolioHedger(pricing_engine=app.state.pricing_engine)
+        # Initialize data feed manager
+        app.state.data_feed_manager = DataFeedManager()
+        app.state.data_feed_manager.add_price_callback(_handle_price_update_sync_factory(app))
+        app.state.data_feed_manager.start()
+        logger.info("✅ Data feed manager started.")
 
+        # Initialize hedger
+        app.state.hedger = PortfolioHedger(pricing_engine=app.state.pricing_engine)
+        logger.info("✅ Hedger initialized.")
+
+        # Initialize trade executor
         app.state.trade_executor = TradeExecutor(
             pricing_engine=app.state.pricing_engine,
             hedger=app.state.hedger
         )
-        
-        app.state.data_feed_manager = DataFeedManager()
-        price_update_callback = _handle_price_update_sync_factory(app) # Get callback with app context
-        app.state.data_feed_manager.add_price_callback(price_update_callback)
-        app.state.data_feed_manager.start()
+        logger.info("✅ Trade executor initialized.")
 
-        # Patch: Initialize pricing engine's current_price from data feed manager if available
-        initial_price = app.state.data_feed_manager.get_current_price()
-        if initial_price and initial_price > 0:
-            app.state.pricing_engine.current_price = initial_price
-            logger.info(f"Patched: Set pricing engine current_price to {initial_price}")
-
-        app.state.ws_manager = ws_manager_global_instance # Make ws_manager accessible via app.state
-
-        # Initialize sandbox service
-        from sandbox.api.websocket_extension import SandboxService
+        # Initialize sandbox service with trade executor
         app.state.sandbox_service = SandboxService(
             data_hub=app.state.data_feed_manager,
-            pricing_engine=app.state.pricing_engine
+            pricing_engine=app.state.pricing_engine,
+            trade_executor=app.state.trade_executor
         )
         app.state.sandbox_service.start()
-        logger.info("Sandbox service initialized and started.")
+        logger.info("✅ Sandbox service started.")
 
-        # Pass app instance to background tasks if they need access to app.state
-        asyncio.create_task(background_market_updates(app))
-        asyncio.create_task(background_position_updates(app))
-        
-        logger.info("✅ API startup complete.")
+        # Start background tasks
+        loop = asyncio.get_running_loop()
+        app.state.market_updates_task = loop.create_task(background_market_updates(app))
+        app.state.position_updates_task = loop.create_task(background_position_updates(app))
+        logger.info("✅ Background tasks started.")
+
+        # Set the startup complete event
+        api_startup_complete_event.set()
+        logger.info("✅ API startup complete event set.")
+
     except Exception as e:
-        logger.error(f"❌ API startup error: {e}", exc_info=True)
-        raise
+        logger.error(f"❌ API Startup failed critically: {e}", exc_info=True)
+        # Set event even on failure to prevent hanging
+        api_startup_complete_event.set()
+        raise RuntimeError(f"API Startup failed: {e}")
 
 # --- Background Tasks ---
 async def background_market_updates(app_instance: FastAPI):
@@ -306,13 +309,12 @@ async def health_check_endpoint(request: Request):
     return {"status": "ok", "version": config.VERSION}
 
 @app.post("/blackscholes/calculate")
-async def calculate_black_scholes_basic_endpoint(request_data: BlackScholesRequest): # Changed param name
+async def calculate_black_scholes_basic_endpoint(request_data: BlackScholesRequest, request: Request):
     """Calculate basic Black-Scholes option price."""
     try:
         pricing_engine = getattr(request.app.state, 'pricing_engine', None)
         if not pricing_engine:
             raise HTTPException(status_code=503, detail="Pricing engine not available.")
-        
         price = pricing_engine.calculate_option_price(
             request_data.current_price,
             request_data.strike_price,
@@ -570,22 +572,41 @@ async def update_synthetic_account_endpoint(account_update: SyntheticAccountUpda
 @app.post("/sandbox/trades/execute")
 async def execute_sandbox_trade_endpoint(trade_request: TradeRequest, request_obj: Request, background_tasks: BackgroundTasks):
     """Execute a trade in the sandbox environment."""
-    local_sandbox_service = getattr(request_obj.app.state, 'sandbox_service', None)
-    local_ws_manager = getattr(request_obj.app.state, 'ws_manager', None)
-    local_pricing_engine = getattr(request_obj.app.state, 'pricing_engine', None)
-
-    if not local_sandbox_service:
-        raise HTTPException(status_code=503, detail="Sandbox service not available")
-    if not local_pricing_engine or not local_pricing_engine.current_price or local_pricing_engine.current_price <= 0:
-        raise HTTPException(status_code=503, detail="Market price not available")
-
-    # Validate quantity and strike
-    if trade_request.quantity <= 0:
-        raise HTTPException(status_code=400, detail="Invalid quantity")
-    if trade_request.strike <= 0:
-        raise HTTPException(status_code=400, detail="Invalid strike price")
-
     try:
+        local_sandbox_service = getattr(request_obj.app.state, 'sandbox_service', None)
+        local_ws_manager = getattr(request_obj.app.state, 'ws_manager', None)
+        local_pricing_engine = getattr(request_obj.app.state, 'pricing_engine', None)
+        local_data_feed_manager = getattr(request_obj.app.state, 'data_feed_manager', None)
+        local_trade_executor = getattr(request_obj.app.state, 'trade_executor', None)
+
+        # Validate service availability
+        if not local_sandbox_service:
+            raise HTTPException(status_code=503, detail="Sandbox service not available")
+        if not local_trade_executor:
+            raise HTTPException(status_code=503, detail="Trade executor not available")
+        
+        # Validate market data
+        current_price = None
+        if local_data_feed_manager and local_data_feed_manager.is_running:
+            current_price = local_data_feed_manager.get_current_price()
+        if not current_price and local_pricing_engine:
+            current_price = local_pricing_engine.current_price
+        
+        if not current_price or current_price <= 0:
+            raise HTTPException(status_code=503, detail="Market price not available")
+
+        # Validate trade request
+        if trade_request.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Invalid quantity")
+        if trade_request.strike <= 0:
+            raise HTTPException(status_code=400, detail="Invalid strike price")
+        if trade_request.expiry_minutes not in config.AVAILABLE_EXPIRIES_MINUTES:
+            raise HTTPException(status_code=400, detail=f"Invalid expiry. Available: {config.AVAILABLE_EXPIRIES_MINUTES}")
+
+        # Create user account if it doesn't exist
+        if trade_request.user_id not in local_trade_executor.user_accounts:
+            local_trade_executor.create_user_account(trade_request.user_id)
+
         # Convert trade request to sandbox format
         sandbox_trade_data = {
             "user_id": trade_request.user_id,
@@ -594,64 +615,61 @@ async def execute_sandbox_trade_endpoint(trade_request: TradeRequest, request_ob
             "side": trade_request.side.lower(),
             "strike": trade_request.strike,
             "expiry_minutes": trade_request.expiry_minutes,
-            "option_type": trade_request.option_type.lower()
+            "option_type": trade_request.option_type.lower(),
+            "current_price": current_price
         }
 
         # Execute trade in sandbox
         success, message, result = await local_sandbox_service.execute_sandbox_trade(sandbox_trade_data)
-        trade_id = f"sandbox_{uuid.uuid4().hex[:8]}"
-        status = "success" if success else "failed"
+        
         if not success:
+            logger.error(f"Sandbox trade execution failed: {message}")
             raise HTTPException(status_code=400, detail=message)
 
-        # Broadcast trade execution to connected clients
+        # Notify connected clients if websocket manager is available
         if local_ws_manager:
-            # Broadcast to all clients for sandbox trades
-            background_tasks.add_task(local_ws_manager.broadcast_safe, {
-                "type": "sandbox_trade_executed",
-                "data": {
-                    "trade_id": trade_id,
-                    "status": status,
-                    "message": message,
-                    "position": result["position"],
-                    "portfolio_summary": result["portfolio_summary"],
-                    "risk_analysis": result["risk_analysis"],
-                    "hedging_plan": result["hedging_plan"]
-                }
-            })
-
-            # Also send a specific update to the user who executed the trade
-            background_tasks.add_task(local_ws_manager.broadcast_safe, {
-                "type": "trade_executed",
-                "data": {
-                    "order_id": trade_id,
-                    "symbol": sandbox_trade_data["symbol"],
-                    "premium": 0.0,  # Sandbox trades don't have real premiums
-                    "position_id": result["position"].position_id if hasattr(result["position"], "position_id") else None
-                }
-            }, user_id=trade_request.user_id)
+            background_tasks.add_task(
+                local_ws_manager.broadcast_trade_update,
+                trade_request.user_id,
+                result
+            )
 
         return {
-            "trade_id": trade_id,
-            "status": status,
-            "message": message,
-            "position": result["position"],
-            "portfolio_summary": result["portfolio_summary"],
-            "risk_analysis": result["risk_analysis"],
-            "hedging_plan": result["hedging_plan"]
+            "status": "success",
+            "trade_id": f"sandbox_{uuid.uuid4().hex[:8]}",
+            "result": result
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Sandbox trade execution error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Sandbox trade execution failed: {str(e)}")
+        logger.error(f"Unexpected error in sandbox trade execution: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources when the application shuts down."""
     logger.info("Shutting down API components...")
     try:
+        # Cancel background tasks
+        if hasattr(app.state, 'market_updates_task'):
+            app.state.market_updates_task.cancel()
+            try:
+                await app.state.market_updates_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"Error cancelling market updates task: {e}")
+
+        if hasattr(app.state, 'position_updates_task'):
+            app.state.position_updates_task.cancel()
+            try:
+                await app.state.position_updates_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"Error cancelling position updates task: {e}")
+
         # Stop sandbox service if it exists
         sandbox_service = getattr(app.state, 'sandbox_service', None)
         if sandbox_service:
@@ -663,6 +681,16 @@ async def shutdown_event():
         if data_feed_manager:
             data_feed_manager.stop()
             logger.info("Data feed manager stopped.")
+
+        # Close all WebSocket connections
+        ws_manager = getattr(app.state, 'ws_manager', None)
+        if ws_manager:
+            for websocket in ws_manager.active_connections:
+                try:
+                    await websocket.close()
+                except Exception as e:
+                    logger.error(f"Error closing WebSocket connection: {e}")
+            logger.info("All WebSocket connections closed.")
 
         logger.info("✅ API shutdown complete.")
     except Exception as e:

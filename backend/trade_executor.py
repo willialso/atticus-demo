@@ -63,6 +63,8 @@ class Position:
     entry_timestamp: float
     entry_btc_price: float
     is_expired: bool = False
+    mark_to_market_usd: float = 0.0
+    entry_price_usd: float = 0.0
 
     def is_open(self) -> bool:
         """Check if position is still open (not expired)."""
@@ -280,11 +282,11 @@ class TradeExecutor:
             return False, f"Sell execution failed: {str(e)}", None
 
     def _create_position(self, order: TradeOrder, side: PositionSide, entry_premium: float, current_price: float) -> Position:
-        """Create a new position from an executed order."""
-        expiry_timestamp = time.time() + (order.expiry_minutes * 60)
-
-        position = Position(
-            position_id=f"pos_{uuid.uuid4().hex[:8]}",
+        """Create a new Position object for a trade."""
+        position_id = f"pos_{uuid.uuid4().hex[:8]}"
+        expiry_timestamp = time.time() + order.expiry_minutes * 60
+        return Position(
+            position_id=position_id,
             user_id=order.user_id,
             symbol=order.symbol,
             side=side,
@@ -294,19 +296,17 @@ class TradeExecutor:
             expiry_timestamp=expiry_timestamp,
             quantity=order.quantity,
             entry_premium=entry_premium,
-            current_market_value=0.0,  # Will be updated
+            current_market_value=0.0,
             unrealized_pnl=0.0,
-            current_delta=order.greeks.get('delta', 0),
-            current_gamma=order.greeks.get('gamma', 0),
-            current_theta=order.greeks.get('theta', 0),
-            current_vega=order.greeks.get('vega', 0),
+            current_delta=0.0,
+            current_gamma=0.0,
+            current_theta=0.0,
+            current_vega=0.0,
             entry_timestamp=time.time(),
-            entry_btc_price=current_price
+            entry_btc_price=current_price,
+            mark_to_market_usd=0.0,
+            entry_price_usd=entry_premium  # Set entry_price_usd to entry_premium for compatibility
         )
-
-        # Calculate initial market value
-        position._update_position_value(current_price)
-        return position
 
     # +++ FIXED METHOD: Now accepts current_btc_price parameter +++
     def update_position_marks(self, current_btc_price: float = None):
@@ -366,7 +366,7 @@ class TradeExecutor:
 
         # Update all user portfolio values
         for account in self.user_accounts.values():
-            self._update_portfolio_value(account, current_btc_price)
+            self._update_portfolio_value(account, current_price)
 
         logger.debug(f"Updated position marks with BTC price: ${current_btc_price:,.2f}")
     # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
