@@ -23,7 +23,7 @@ COINBASE_WS_URL_ALTERNATIVE = "wss://ws-feed.exchange.coinbase.com"  # Working a
 
 # === CONTRACT SPECIFICATIONS ===
 # *** Updated contract size to 0.1 BTC for institutional standard ***
-STANDARD_CONTRACT_SIZE_BTC = 0.1 # Each contract represents 0.1 BTC
+STANDARD_CONTRACT_SIZE_BTC = 0.1 # Each contract is 0.1 BTC
 CONTRACT_SIZES_AVAILABLE = [0.1] # Institutional contract size
 
 # === EXPIRY CONFIGURATIONS ===
@@ -50,9 +50,7 @@ RISK_FREE_RATE = 0.05 # 5% annual risk-free rate
 MIN_VOLATILITY = 0.15 # 15% minimum annualized volatility floor
 MAX_VOLATILITY = 3.00 # 300% maximum volatility cap
 DEFAULT_VOLATILITY = 0.80 # 80% default if calculation fails or for initial warm-up
-DEFAULT_VOLATILITY_FOR_BASIC_BS = 0.80 # If using a very basic BS model elsewhere
-
-# Advanced volatility settings
+DEFAULT_VOLATILITY_FOR_BASIC_BS = 0.80
 VOLATILITY_REGIME_DETECTION = True
 VOLATILITY_EWMA_ALPHA = 0.1 # Decay factor for EWMA volatility
 
@@ -74,7 +72,7 @@ VOLATILITY_DEFAULT_SHORT_EXPIRY_ADJUSTMENT = 1.0
 # Model: Vol_strike = ATM_Vol_expiry * (1 + CURVATURE * ln(K/S)^2 + SKEW * ln(K/S))
 # These parameters define the general shape of the smile/skew.
 # Positive CURVATURE creates a "smile" (higher vol for OTM/ITM).
-# Negative SKEW_FACTOR typically creates "reverse skew" (OTM puts > OTM calls IV), common in equity/crypto.
+# Negative SKEW_FACTOR typically creates "reverse skew" (OTM puts > OTM calls IV), common in equity/crypto
 VOLATILITY_SMILE_CURVATURE = 0.15 # Higher value = more pronounced smile. Example: 0.1 to 0.3
 VOLATILITY_SKEW_FACTOR = -0.10 # Example: -0.05 to -0.2 for crypto/equity.
 
