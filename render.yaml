@@ -26,4 +26,4 @@ services:
       - key: VITE_API_URL
         value: "https://atticus-demo.onrender.com"
       - key: VITE_WS_URL
-        value: "wss://atticus-demo.onrender.com/ws" 
+        value: "wss://atticus-demo.onrender.com" 

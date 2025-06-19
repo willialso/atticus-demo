@@ -33,7 +33,7 @@ interface UseWebSocketReturn {
 
 export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn {
   const {
-    url = 'wss://atticus-demo.onrender.com/ws',
+    url,
     maxReconnectAttempts = 5,
     reconnectInterval = 1000,
     maxReconnectInterval = 30000,
@@ -42,6 +42,22 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     onDisconnect,
     onError
   } = options;
+
+  // Option A: Construct WebSocket URL properly
+  const getWsBaseUrl = () => {
+    if (url) return url;
+    // Try to get from environment, fallback to default
+    try {
+      return (import.meta as any).env?.VITE_WS_URL || 'wss://atticus-demo.onrender.com';
+    } catch {
+      return 'wss://atticus-demo.onrender.com';
+    }
+  };
+  
+  const base = getWsBaseUrl();
+  const cleanBase = base.replace(/\/+$/, ''); // strip trailing /
+  const wsPath = '/ws';
+  const wsUrl = `${cleanBase}${wsPath}`;
 
   const [status, setStatus] = useState<WebSocketStatus>('disconnected');
   const [lastError, setLastError] = useState<string | null>(null);
@@ -153,14 +169,14 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     }
 
     try {
-      console.log(`🔌 Connecting to WebSocket: ${url}`);
+      console.log(`🔌 [WS] connecting to ${wsUrl}`);
       cleanup();
       
       isConnectingRef.current = true;
       setStatus('connecting');
       setLastError(null);
 
-      wsRef.current = new WebSocket(url);
+      wsRef.current = new WebSocket(wsUrl);
       
       wsRef.current.onopen = handleOpen;
       wsRef.current.onclose = handleClose;
@@ -173,7 +189,7 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
       setStatus('error');
       isConnectingRef.current = false;
     }
-  }, [url, cleanup, handleOpen, handleClose, handleError, handleMessage]);
+  }, [wsUrl, cleanup, handleOpen, handleClose, handleError, handleMessage]);
 
   // Disconnect function
   const disconnect = useCallback(() => {
@@ -202,16 +218,16 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
         setLastError('Failed to send message');
       }
     } else {
-      console.warn('⚠️ Cannot send message: WebSocket not connected');
+      console.warn('⚠️ WebSocket not connected, cannot send message');
       setLastError('WebSocket not connected');
     }
   }, []);
 
   // Auto-connect on mount
   useEffect(() => {
-    shouldReconnectRef.current = true;
     connect();
-
+    
+    // Cleanup on unmount
     return () => {
       shouldReconnectRef.current = false;
       cleanup();

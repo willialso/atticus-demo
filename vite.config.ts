@@ -6,7 +6,7 @@ export default defineConfig({
   define: {
     // Force environment variables to be replaced at build time
     'import.meta.env.VITE_API_URL': JSON.stringify('https://atticus-demo.onrender.com'),
-    'import.meta.env.VITE_WS_URL': JSON.stringify('wss://atticus-demo.onrender.com/ws'),
+    'import.meta.env.VITE_WS_URL': JSON.stringify('wss://atticus-demo.onrender.com'),
   },
   build: {
     // Force source maps for debugging
