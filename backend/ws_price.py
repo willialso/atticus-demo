@@ -24,8 +24,13 @@ async def broadcast_price_update(price: float):
     if not clients:
         return
     
-    payload = {"type": "price_update", "data": {"price": price}}
+    # Ensure price is properly formatted as a float with 2 decimal places
+    formatted_price = round(float(price), 2)
+    
+    payload = {"type": "price_update", "data": {"price": formatted_price}}
     disconnected_clients = []
+    
+    logger.info(f"💰 Broadcasting price update: ${formatted_price:,.2f} to {len(clients)} clients")
     
     for ws in list(clients):
         try:

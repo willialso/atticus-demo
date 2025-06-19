@@ -178,6 +178,7 @@ def _handle_price_update_sync_factory(app_instance: FastAPI):
                 price_val = getattr(price_data, 'price', 0.0)
                 volume_val = getattr(price_data, 'volume', 0.0)
                 if price_val > 0:
+                    logger.info(f"📊 Processing price update: ${price_val:,.2f} (volume: {volume_val:,.0f})")
                     pricing_engine_instance.update_market_data(price_val, volume_val)
                     _handle_price_update_sync.latest_price = price_val # Store on function object
                     
@@ -186,6 +187,10 @@ def _handle_price_update_sync_factory(app_instance: FastAPI):
                         asyncio.create_task(ws_price.broadcast_price_update(price_val))
                     except Exception as e:
                         logger.error(f"Failed to broadcast price update: {e}")
+                    else:
+                        logger.info(f"✅ Price broadcast task created for ${price_val:,.2f}")
+                else:
+                    logger.warning(f"Invalid price value received: {price_val}")
                         
         except Exception as e:
             logger.error(f"Error in price update handler: {e}")
