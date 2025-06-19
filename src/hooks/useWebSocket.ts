@@ -173,6 +173,15 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
       const message = event.data;
       console.log('📨 WebSocket message received:', message);
       
+      // Handle server-initiated ping (keep-alive)
+      if (message === 'ping') {
+        console.log('🏓 Received ping from server, sending pong');
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send('pong');
+        }
+        return;
+      }
+      
       // Handle simple text responses (chat answers)
       if (typeof message === 'string' && !message.startsWith('Echo:') && !message.startsWith('pong')) {
         // This is likely a chat response
@@ -191,9 +200,9 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
         }
       }
       
-      // Handle ping/pong
+      // Handle pong responses
       if (message === 'pong') {
-        console.log('🏓 Received pong');
+        console.log('🏓 Received pong response');
       }
       
       onMessage?.({ type: 'message', data: message, timestamp: Date.now() });
