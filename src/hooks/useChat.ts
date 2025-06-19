@@ -113,7 +113,7 @@ export function useChat(): UseChatReturn {
         setStatus('websocket_connected');
         
         // Send via WebSocket
-        sendChatMessage(message);
+        sendChatMessage(message, screenState);
         
         // The response will be handled by the WebSocket message handler
         // which will call onChatResponse and update the message

@@ -45,7 +45,7 @@ interface WebSocketOptions {
 interface UseWebSocketReturn {
   status: WebSocketStatus;
   sendMessage: (message: WebSocketMessage) => void;
-  sendChatMessage: (message: string) => void;
+  sendChatMessage: (message: string, screenState?: any) => void;
   connect: () => void;
   disconnect: () => void;
   lastError: string | null;
@@ -173,39 +173,66 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
       const message = event.data;
       console.log('📨 WebSocket message received:', message);
       
-      // Handle server-initiated ping (keep-alive)
-      if (message === 'ping') {
-        console.log('🏓 Received ping from server, sending pong');
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send('pong');
+      // Try to parse as JSON first
+      try {
+        const payload = JSON.parse(message);
+        
+        // Handle server-initiated ping (keep-alive)
+        if (payload.type === "ping") {
+          console.log('🏓 Received ping from server, sending pong');
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: "pong" }));
+          }
+          return; // don't touch React state
         }
-        return;
-      }
-      
-      // Handle simple text responses (chat answers)
-      if (typeof message === 'string' && !message.startsWith('Echo:') && !message.startsWith('pong')) {
-        // This is likely a chat response
-        if (onChatResponse) {
-          onChatResponse({
-            type: 'chat_response',
-            data: {
-              answer: message,
-              confidence: 1.0,
-              sources: [],
-              jargon_terms: [],
-              context_used: '',
-              timestamp: Date.now()
-            }
-          });
+        
+        // Handle chat responses
+        if (payload.type === "chat_response") {
+          console.log('💬 Chat response received:', payload);
+          if (onChatResponse) {
+            onChatResponse(payload);
+          }
+          return;
         }
+        
+        // Handle other JSON messages
+        onMessage?.({ type: payload.type || 'message', data: payload.data || payload, timestamp: Date.now() });
+        
+      } catch (jsonError) {
+        // Handle legacy text format for backward compatibility
+        if (message === 'ping') {
+          console.log('🏓 Received legacy ping from server, sending pong');
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send('pong');
+          }
+          return;
+        }
+        
+        if (message === 'pong') {
+          console.log('🏓 Received pong response');
+          return;
+        }
+        
+        // Handle legacy chat responses (plain text)
+        if (typeof message === 'string' && !message.startsWith('Echo:') && !message.startsWith('pong')) {
+          // This is likely a chat response
+          if (onChatResponse) {
+            onChatResponse({
+              type: 'chat_response',
+              data: {
+                answer: message,
+                confidence: 1.0,
+                sources: [],
+                jargon_terms: [],
+                context_used: '',
+                timestamp: Date.now()
+              }
+            });
+          }
+        }
+        
+        onMessage?.({ type: 'message', data: message, timestamp: Date.now() });
       }
-      
-      // Handle pong responses
-      if (message === 'pong') {
-        console.log('🏓 Received pong response');
-      }
-      
-      onMessage?.({ type: 'message', data: message, timestamp: Date.now() });
     } catch (error) {
       console.error('❌ Failed to parse WebSocket message:', error);
     }
@@ -278,12 +305,17 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     }
   }, []);
 
-  // Send chat message using simplified format
-  const sendChatMessage = useCallback((message: string) => {
+  // Send chat message using JSON format
+  const sendChatMessage = useCallback((message: string, screenState: any = {}) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const chatMessage = `chat:${message}`;
+      const chatMessage = {
+        type: "chat",
+        message: message,
+        screen_state: screenState,
+        timestamp: Date.now()
+      };
       console.log('📤 Sending chat message:', chatMessage);
-      wsRef.current.send(chatMessage);
+      wsRef.current.send(JSON.stringify(chatMessage));
     } else {
       console.error('❌ WebSocket not connected, cannot send chat message');
       setLastError('WebSocket not connected');
