@@ -1,5 +1,5 @@
 // components/StatusBanner.tsx
-// Status banner for Golden Retriever 2.0 connection status
+// Status banner for platform connection status
 
 import React from 'react';
 import { ChatStatus } from '../hooks/useChat';
@@ -20,7 +20,7 @@ export const StatusBanner: React.FC<StatusBannerProps> = ({ status, onRetry }) =
         return {
           color: 'bg-blue-100 border-blue-400 text-blue-800',
           icon: '🔄',
-          message: 'Connecting to Golden Retriever 2.0...',
+          message: 'Connecting to platform...',
           showRetry: false
         };
       case 'fallback':

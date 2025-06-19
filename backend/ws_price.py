@@ -19,7 +19,7 @@ async def ws_price(ws: WebSocket):
         clients.discard(ws)
         logger.info(f"🔌 Price WebSocket disconnected (Total: {len(clients)})")
 
-async def broadcast_price(price: float):
+async def broadcast_price_update(price: float):
     """Broadcast price update to all connected clients - ONLY price updates, nothing else"""
     if not clients:
         return

@@ -1,5 +1,5 @@
 // utils/fetchWithRetry.ts
-// Resilient fetch wrapper for Golden Retriever 2.0 API calls
+// Resilient fetch wrapper for platform API calls
 
 export interface FetchOptions extends RequestInit {
   retries?: number;
@@ -61,11 +61,11 @@ export async function fetchWithRetry(
   throw new Error("Max retries exceeded");
 }
 
-// Specialized function for Golden Retriever 2.0 chat
+// Specialized function for platform chat
 export async function chatWithRetry(
   message: string, 
   screenState: any, 
-  baseUrl: string = "/gr2/chat"
+  baseUrl: string = "/chat"
 ): Promise<{ answer: string; confidence?: number }> {
   try {
     const data = await fetchWithRetry(
@@ -81,8 +81,8 @@ export async function chatWithRetry(
     );
     
     return {
-      answer: data.answer || "No response received",
-      confidence: data.confidence
+      answer: data.data?.answer || "No response received",
+      confidence: data.data?.confidence || 1.0
     };
   } catch (e: any) {
     // Return fallback response based on error type

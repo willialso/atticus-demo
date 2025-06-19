@@ -1,5 +1,5 @@
 # backend/cors_config.py
-# Bullet-proof CORS configuration for Golden Retriever 2.0
+# Bullet-proof CORS configuration for Bitcoin Options Platform
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request, Response

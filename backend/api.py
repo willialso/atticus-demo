@@ -25,14 +25,6 @@ from backend.utils import setup_logger # Your logging utility
 # Add this import for SandboxService
 from sandbox.api.websocket_extension import SandboxService
 
-# Add Golden Retriever 2.0 router
-try:
-    from backend.api_gr2 import router as gr2_router
-    GR2_ROUTER_AVAILABLE = True
-except ImportError as e:
-    logging.warning(f"Golden Retriever 2.0 router not available: {e}")
-    GR2_ROUTER_AVAILABLE = False
-
 # Conditional imports
 try:
     from backend.rl_hedger import RLHedger
@@ -48,6 +40,9 @@ if getattr(config, 'SENTIMENT_ANALYSIS_ENABLED', False):
         SENTIMENT_ANALYZER_AVAILABLE = False
 else:
     SENTIMENT_ANALYZER_AVAILABLE = False
+
+# Import the dedicated price WebSocket module
+from backend import ws_price
 
 # Setup Logger
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -104,13 +99,6 @@ app = FastAPI(
 from backend.cors_config import setup_cors
 setup_cors(app)
 logger.info("✅ Bullet-proof CORS middleware configured")
-
-# Include Golden Retriever 2.0 router
-if GR2_ROUTER_AVAILABLE:
-    app.include_router(gr2_router, prefix="", tags=["Golden Retriever 2.0"])
-    logger.info("✅ Golden Retriever 2.0 router included")
-else:
-    logger.warning("⚠️ Golden Retriever 2.0 router not included - not available")
 
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
@@ -192,16 +180,41 @@ def _handle_price_update_sync_factory(app_instance: FastAPI):
                 if price_val > 0:
                     pricing_engine_instance.update_market_data(price_val, volume_val)
                     _handle_price_update_sync.latest_price = price_val # Store on function object
-                else:
-                    logger.debug(f"Received invalid price_data in callback: {price_data}")
-            else:
-                logger.warning("Pricing engine not found on app.state, cannot handle price update.")
-                _handle_price_update_sync.latest_price = getattr(price_data, 'price', 0.0) # Still try to store
+                    
+                    # Broadcast price update using dedicated price WebSocket
+                    try:
+                        asyncio.create_task(ws_price.broadcast_price_update(price_val))
+                    except Exception as e:
+                        logger.error(f"Failed to broadcast price update: {e}")
+                        
         except Exception as e:
-            logger.error(f"❌ Error in _handle_price_update_sync: {e}", exc_info=True)
-            _handle_price_update_sync.latest_price = getattr(price_data, 'price', 0.0) # Attempt to store
-    _handle_price_update_sync.latest_price = 0.0 # Initialize attribute
+            logger.error(f"Error in price update handler: {e}")
+    
     return _handle_price_update_sync
+
+# --- Stock Prompts for Simple Chat ---
+STOCK_PROMPTS = {
+    "atm_itm_otm": {
+        "question": "What is the difference between ATM, ITM, and OTM?",
+        "answer": "ATM (At-The-Money): Strike price equals current market price. ITM (In-The-Money): Option has intrinsic value (call: strike < market price, put: strike > market price). OTM (Out-of-The-Money): Option has no intrinsic value (call: strike > market price, put: strike < market price)."
+    },
+    "greeks": {
+        "question": "What are the Greeks in options trading?",
+        "answer": "Delta: Price change of option per $1 change in underlying. Gamma: Rate of change of delta. Theta: Time decay of option value. Vega: Sensitivity to volatility changes. Rho: Sensitivity to interest rate changes."
+    },
+    "implied_volatility": {
+        "question": "What is implied volatility?",
+        "answer": "Implied volatility is the market's expectation of future price volatility, derived from option prices. Higher IV means higher option premiums due to expected larger price swings."
+    },
+    "time_decay": {
+        "question": "How does time decay affect options?",
+        "answer": "Options lose value as expiration approaches (theta decay). This accelerates as expiration gets closer, especially for ATM options. Time decay is why many options expire worthless."
+    },
+    "risk_management": {
+        "question": "What are key risk management strategies for options?",
+        "answer": "1) Position sizing: Never risk more than 1-2% of capital per trade. 2) Stop losses: Set clear exit points. 3) Diversification: Don't concentrate in one direction. 4) Understand max loss: Know your worst-case scenario before entering."
+    }
+}
 
 # --- FastAPI Startup Event ---
 @app.on_event("startup")
@@ -248,7 +261,6 @@ async def startup_event():
 
         # Start background tasks
         loop = asyncio.get_running_loop()
-        app.state.market_updates_task = loop.create_task(background_market_updates(app))
         app.state.position_updates_task = loop.create_task(background_position_updates(app))
         logger.info("✅ Background tasks started.")
 
@@ -263,32 +275,6 @@ async def startup_event():
         raise RuntimeError(f"API Startup failed: {e}")
 
 # --- Background Tasks ---
-async def background_market_updates(app_instance: FastAPI):
-    """Background task to update market data and broadcast to WebSocket clients."""
-    logger.info("Background market updates task started.")
-    while True:
-        try:
-            await asyncio.sleep(1.0)  # Update every second
-            data_feed_manager = getattr(app_instance.state, 'data_feed_manager', None)
-            if not data_feed_manager or not data_feed_manager.is_running:
-                continue
-
-            current_price = data_feed_manager.get_current_price()
-            if current_price and current_price > 0:
-                ws_manager = getattr(app_instance.state, 'ws_manager', None)
-                if ws_manager:
-                    await ws_manager.broadcast_safe({
-                        "type": "market_update",
-                        "data": {
-                            "price": current_price,
-                            "timestamp": time.time()
-                        }
-                    })
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error(f"Error in background market updates: {e}", exc_info=True)
-
 async def background_position_updates(app_instance: FastAPI):
     """Background task to update position data and broadcast to WebSocket clients."""
     logger.info("Background position updates task started.")
@@ -468,74 +454,33 @@ async def close_position_endpoint(close_request: ClosePositionRequest, request_o
     except HTTPException: raise
     except Exception as e: logger.error(f"Position close error: {e}", exc_info=True); raise HTTPException(status_code=500, detail=f"Position close failed: {str(e)}")
 
-# +++ FIXED: WebSocket endpoint - removed 'request: Request' parameter +++
+# +++ PRICE-ONLY WebSocket endpoint - integrates with dedicated price broadcasting +++
+# FORCE DEPLOY: This ensures the price-only WebSocket fix is deployed after rollback
 @app.websocket("/ws")
-async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[str] = None):
-    # Get components from app.state directly via websocket.app.state (not request.app.state)
-    local_ws_manager = getattr(websocket.app.state, 'ws_manager', None)
-    local_pricing_engine = getattr(websocket.app.state, 'pricing_engine', None)
-    price_update_callback_ref = _handle_price_update_sync_factory(websocket.app)
-
-    if not local_ws_manager:
-        logger.error("WebSocket connection attempt but ws_manager not found on app.state.")
-        await websocket.accept()
-        await websocket.close(code=1011, reason="WebSocket manager not available")
-        return
-
-    connection_id = f"{user_id}_" if user_id else ""
-    connection_id += f"{websocket.client.host}_{websocket.client.port}"
-    await local_ws_manager.connect(websocket, user_id)
-    
+async def websocket_endpoint(websocket: WebSocket):
     try:
-        current_price_val_ws = 0.0
-        if local_pricing_engine and hasattr(local_pricing_engine, 'current_price') and local_pricing_engine.current_price > 0:
-            current_price_val_ws = local_pricing_engine.current_price
-        elif hasattr(price_update_callback_ref, 'latest_price'):
-            current_price_val_ws = price_update_callback_ref.latest_price
+        await websocket.accept()
+        logger.info("🔌 Price WebSocket connected")
         
-        await websocket.send_text(json.dumps({
-            "type": "connected", 
-            "data": {
-                "message": f"Connected to {config.PLATFORM_NAME}", 
-                "current_price": current_price_val_ws, 
-                "timestamp": time.time()
-            }
-        }))
+        # Add this connection to the price WebSocket clients
+        ws_price.clients.add(websocket)
+        logger.info(f"🔌 Total WebSocket clients: {len(ws_price.clients)}")
         
-        while True:
-            try:
-                data_received = await asyncio.wait_for(websocket.receive_text(), timeout=config.WEBSOCKET_TIMEOUT_SECONDS)
-                message_obj = json.loads(data_received)
-                if message_obj.get("type") == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong", "timestamp": time.time()}))
-            except asyncio.TimeoutError:
-                await websocket.send_text(json.dumps({"type": "keepalive", "timestamp": time.time()}))
-            except WebSocketDisconnect:
-                logger.info(f"WebSocket {connection_id} disconnected by client.")
-                break
-            except json.JSONDecodeError:
-                logger.warning(f"WebSocket {connection_id} received invalid JSON.")
-            except Exception as e_ws_loop:
-                logger.warning(f"WebSocket error for {connection_id} during receive/process: {e_ws_loop}")
-                break
-    except Exception as e_ws_conn:
-        logger.error(f"❌ WebSocket connection error for {connection_id}: {e_ws_conn}", exc_info=True)
-    finally:
-        logger.info(f"Closing WebSocket connection for: {connection_id}")
-        if local_ws_manager:
-            await local_ws_manager.disconnect(websocket, user_id)
-
-# --- Main Execution Guard (if api.py is run directly) ---
-if __name__ == "__main__":
-    import uvicorn
-    logger.info(f"Starting Uvicorn server directly from api.py for {config.PLATFORM_NAME} on {config.API_HOST}:{config.API_PORT}")
-    uvicorn.run(
-        "backend.api:app", # Ensure this points to the app object correctly
-        host=config.API_HOST,
-        port=config.API_PORT,
-        log_level=config.LOG_LEVEL.lower(), 
-        reload=config.DEMO_MODE 
-    )
+        try:
+            while True:
+                # Just keep the connection alive - ignore all client messages
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            logger.info("🔌 Price WebSocket disconnected by client")
+        except Exception as e:
+            logger.warning("Price WebSocket error: %s", e)
+        finally:
+            # Remove from price WebSocket clients
+            ws_price.clients.discard(websocket)
+            logger.info(f"🔌 WebSocket client removed. Total clients: {len(ws_price.clients)}")
+    except Exception as e:
+        logger.error(f"❌ WebSocket connection error: {e}", exc_info=True)
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 # New endpoint to update synthetic account information
 @app.post("/sandbox/update-account")
@@ -641,9 +586,19 @@ async def execute_sandbox_trade_endpoint(trade_request: TradeRequest, request_ob
         # Notify connected clients if websocket manager is available
         if local_ws_manager:
             background_tasks.add_task(
-                local_ws_manager.broadcast_trade_update,
-                trade_request.user_id,
-                result
+                local_ws_manager.broadcast_safe,
+                {
+                    "type": "sandbox_trade_executed",
+                    "data": {
+                        "user_id": trade_request.user_id,
+                        "symbol": sandbox_trade_data["symbol"],
+                        "quantity": trade_request.quantity,
+                        "side": trade_request.side,
+                        "strike": trade_request.strike,
+                        "result": result
+                    }
+                },
+                user_id=trade_request.user_id
             )
 
         return {
@@ -664,15 +619,6 @@ async def shutdown_event():
     logger.info("Shutting down API components...")
     try:
         # Cancel background tasks
-        if hasattr(app.state, 'market_updates_task'):
-            app.state.market_updates_task.cancel()
-            try:
-                await app.state.market_updates_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"Error cancelling market updates task: {e}")
-
         if hasattr(app.state, 'position_updates_task'):
             app.state.position_updates_task.cancel()
             try:
@@ -708,3 +654,68 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"❌ API shutdown error: {e}", exc_info=True)
         raise
+
+# +++ SIMPLE CHAT ENDPOINT WITH STOCK PROMPTS +++
+@app.post("/chat")
+async def chat_endpoint(chat_request: dict):
+    """Simple HTTP chat endpoint with stock prompts for options education."""
+    try:
+        message = chat_request.get("message", "").lower().strip()
+        
+        # Check for stock prompt matches
+        for prompt_id, prompt_data in STOCK_PROMPTS.items():
+            if any(keyword in message for keyword in prompt_data["question"].lower().split()):
+                return {
+                    "type": "chat_response",
+                    "data": {
+                        "answer": prompt_data["answer"],
+                        "question": prompt_data["question"],
+                        "timestamp": time.time()
+                    }
+                }
+        
+        # Default response for unrecognized questions
+        return {
+            "type": "chat_response",
+            "data": {
+                "answer": "I can help explain options trading concepts. Try asking about: ATM/ITM/OTM, Greeks, implied volatility, time decay, or risk management strategies.",
+                "available_topics": list(STOCK_PROMPTS.keys()),
+                "timestamp": time.time()
+            }
+        }
+        
+    except Exception as chat_error:
+        logger.error(f"Chat processing error: {chat_error}")
+        return {
+            "type": "chat_response",
+            "data": {
+                "answer": "Sorry, I'm having trouble processing your question right now.",
+                "error": str(chat_error),
+                "timestamp": time.time()
+            }
+        }
+
+@app.get("/chat/prompts")
+async def get_available_prompts():
+    """Get list of available stock prompts."""
+    return {
+        "prompts": [
+            {
+                "id": prompt_id,
+                "question": prompt_data["question"]
+            }
+            for prompt_id, prompt_data in STOCK_PROMPTS.items()
+        ]
+    }
+
+# --- Main Execution Guard (if api.py is run directly) ---
+if __name__ == "__main__":
+    import uvicorn
+    logger.info(f"Starting Uvicorn server directly from api.py for {config.PLATFORM_NAME} on {config.API_HOST}:{config.API_PORT}")
+    uvicorn.run(
+        "backend.api:app", # Ensure this points to the app object correctly
+        host=config.API_HOST,
+        port=config.API_PORT,
+        log_level=config.LOG_LEVEL.lower(), 
+        reload=config.DEMO_MODE 
+    )
