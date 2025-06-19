@@ -35,7 +35,7 @@ export function useChat(): UseChatReturn {
   // WebSocket integration
   const {
     status: websocketStatus,
-    sendChatMessage: sendWebSocketChat,
+    sendChatMessage,
     connect: connectWebSocket,
     disconnect: disconnectWebSocket,
     lastError: lastWebSocketError
@@ -91,88 +91,56 @@ export function useChat(): UseChatReturn {
     }
   });
 
-  const sendMessage = useCallback(async (message: string, screenState: any) => {
-    const messageId = Date.now().toString();
-    const timestamp = new Date();
+  const sendMessage = useCallback(async (message: string, screenState: any = {}) => {
+    if (!message.trim()) return;
 
-    // Add user message immediately
-    const userMessage: ChatMessage = {
+    const messageId = Date.now().toString();
+    const newMessage: ChatMessage = {
       id: messageId,
       message,
       answer: '',
-      timestamp,
+      timestamp: new Date(),
       source: 'websocket'
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => [...prev, newMessage]);
     setStatus('loading');
-    setPendingMessageId(messageId);
 
     try {
-      // Try WebSocket first (preferred method)
+      // Try WebSocket first
       if (websocketStatus === 'connected') {
-        console.log('📤 Sending chat message via WebSocket');
-        sendWebSocketChat(message, screenState);
+        console.log('🚀 Sending via WebSocket');
+        setStatus('websocket_connected');
         
-        // Set a timeout to fallback to HTTP if no response
-        setTimeout(() => {
-          if (pendingMessageId === messageId) {
-            console.log('⏰ WebSocket timeout, falling back to HTTP');
-            fallbackToHttp(message, messageId, screenState);
-          }
-        }, 10000); // 10 second timeout
+        // Send via WebSocket
+        sendChatMessage(message);
         
+        // The response will be handled by the WebSocket message handler
+        // which will call onChatResponse and update the message
       } else {
-        // Fallback to HTTP immediately if WebSocket not connected
-        console.log('🔌 WebSocket not connected, using HTTP fallback');
-        fallbackToHttp(message, messageId, screenState);
-      }
-
-    } catch (error) {
-      console.error('❌ Error sending message:', error);
-      fallbackToHttp(message, messageId, screenState);
-    }
-  }, [websocketStatus, sendWebSocketChat, pendingMessageId]);
-
-  const fallbackToHttp = useCallback(async (message: string, messageId: string, screenState: any) => {
-    try {
-      console.log('🔄 Using HTTP fallback for chat');
-      const result = await chatWithRetry(message, screenState);
-      
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId 
-          ? { 
-              ...msg, 
-              answer: result.answer, 
-              confidence: result.confidence,
-              isError: result.confidence === 0,
-              source: 'http'
-            }
-          : msg
-      ));
-
-      if (result.confidence === 0) {
+        // Fallback to HTTP
+        console.log('🔄 Falling back to HTTP');
         setStatus('fallback');
-      } else {
+        
+        const response = await chatWithRetry(message, screenState);
+        
+        setMessages(prev => prev.map(msg => 
+          msg.id === messageId 
+            ? { ...msg, answer: response.answer, confidence: response.confidence, source: 'http' }
+            : msg
+        ));
         setStatus('online');
       }
-      
     } catch (error) {
+      console.error('❌ Chat error:', error);
       setMessages(prev => prev.map(msg => 
         msg.id === messageId 
-          ? { 
-              ...msg, 
-              answer: "⚠️ Service temporarily unavailable. Please try again.",
-              isError: true,
-              source: 'http'
-            }
+          ? { ...msg, answer: 'Sorry, I encountered an error. Please try again.', isError: true }
           : msg
       ));
       setStatus('error');
     }
-    
-    setPendingMessageId(null);
-  }, []);
+  }, [websocketStatus, sendChatMessage]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);

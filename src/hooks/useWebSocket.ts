@@ -45,7 +45,7 @@ interface WebSocketOptions {
 interface UseWebSocketReturn {
   status: WebSocketStatus;
   sendMessage: (message: WebSocketMessage) => void;
-  sendChatMessage: (message: string, screenState?: any) => void;
+  sendChatMessage: (message: string) => void;
   connect: () => void;
   disconnect: () => void;
   lastError: string | null;
@@ -170,15 +170,33 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
   // Handle incoming messages
   const handleMessage = useCallback((event: MessageEvent) => {
     try {
-      const message: WebSocketMessage = JSON.parse(event.data);
+      const message = event.data;
       console.log('📨 WebSocket message received:', message);
       
-      // Handle chat responses specifically
-      if (message.type === 'chat_response' && onChatResponse) {
-        onChatResponse(message as ChatResponse);
+      // Handle simple text responses (chat answers)
+      if (typeof message === 'string' && !message.startsWith('Echo:') && !message.startsWith('pong')) {
+        // This is likely a chat response
+        if (onChatResponse) {
+          onChatResponse({
+            type: 'chat_response',
+            data: {
+              answer: message,
+              confidence: 1.0,
+              sources: [],
+              jargon_terms: [],
+              context_used: '',
+              timestamp: Date.now()
+            }
+          });
+        }
       }
       
-      onMessage?.(message);
+      // Handle ping/pong
+      if (message === 'pong') {
+        console.log('🏓 Received pong');
+      }
+      
+      onMessage?.({ type: 'message', data: message, timestamp: Date.now() });
     } catch (error) {
       console.error('❌ Failed to parse WebSocket message:', error);
     }
@@ -251,15 +269,17 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     }
   }, []);
 
-  // Send chat message function
-  const sendChatMessage = useCallback((message: string, screenState?: any) => {
-    const chatMessage: ChatMessage = {
-      type: 'chat',
-      message,
-      screen_state: screenState
-    };
-    sendMessage(chatMessage);
-  }, [sendMessage]);
+  // Send chat message using simplified format
+  const sendChatMessage = useCallback((message: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      const chatMessage = `chat:${message}`;
+      console.log('📤 Sending chat message:', chatMessage);
+      wsRef.current.send(chatMessage);
+    } else {
+      console.error('❌ WebSocket not connected, cannot send chat message');
+      setLastError('WebSocket not connected');
+    }
+  }, []);
 
   // Auto-connect on mount
   useEffect(() => {
