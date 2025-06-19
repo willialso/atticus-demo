@@ -1,7 +1,24 @@
 {
+  "name": "btc-options-platform",
+  "version": "1.0.0",
+  "type": "module",
   "scripts": {
+    "dev": "vite",
     "build": "rm -rf dist && vite build",
     "build:clean": "rm -rf dist node_modules/.vite && npm run build",
-    "build:debug": "rm -rf dist node_modules/.vite && VITE_DEBUG=true npm run build"
+    "build:debug": "rm -rf dist node_modules/.vite && VITE_DEBUG=true npm run build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.263.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.15",
+    "@types/react-dom": "^18.2.7",
+    "@vitejs/plugin-react": "^4.0.3",
+    "typescript": "^5.0.2",
+    "vite": "^4.4.5"
   }
 } 

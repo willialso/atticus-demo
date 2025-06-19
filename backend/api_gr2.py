@@ -15,6 +15,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from gr2.screen_rag import GR2
     from gr2.config import SCREEN_SCHEMA
+    from gr2.post_processor import clean_response, format_bullet_points
+    from gr2.loop_guard import loop_guard
     GR2_AVAILABLE = True
 except ImportError as e:
     logging.warning(f"Golden Retriever 2.0 not available: {e}")
@@ -88,14 +90,33 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             logger.warning(f"Screen state validation error: {e}")
             # Continue with default values
         
+        # Check for loops (repetitive questions)
+        user_id = req.user_id or "default_user"
+        is_loop, loop_response = loop_guard.check_loop(req.message, user_id)
+        
+        if is_loop:
+            return ChatResponse(
+                answer=loop_response,
+                confidence=1.0,
+                sources=[],
+                jargon_terms=[],
+                context_used="Loop prevention"
+            )
+        
         # Process with Golden Retriever 2.0
         result = GR2(
             question=req.message,
             screen_state=screen_state
         )
         
+        # Post-process the response for user-friendly output
+        cleaned_answer = clean_response(result.answer)
+        
+        # Format as bullet points if response is long
+        final_answer = format_bullet_points(cleaned_answer)
+        
         return ChatResponse(
-            answer=result.answer,
+            answer=final_answer,
             sources=result.retrieved_docs_titles,
             confidence=result.confidence,
             jargon_terms=result.jargon_terms,
@@ -106,8 +127,9 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         logger.error(f"Error in GR2 chat endpoint: {e}", exc_info=True)
         # Return fallback response
         fallback_answer = GR2.fallback(req.message) if GR2_AVAILABLE else "Service temporarily unavailable."
+        cleaned_fallback = clean_response(fallback_answer)
         return ChatResponse(
-            answer=fallback_answer,
+            answer=cleaned_fallback,
             confidence=0.0
         )
 
@@ -177,4 +199,55 @@ async def test_gr2_endpoint(req: ChatRequest):
         return {
             "test_passed": False,
             "error": str(e)
-        } 
+        }
+
+@router.get("/gr2/cache-stats")
+async def get_cache_stats():
+    """Get loop guard cache statistics."""
+    if not GR2_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Golden Retriever 2.0 not available")
+    
+    try:
+        stats = loop_guard.get_cache_stats()
+        return {
+            "cache_stats": stats,
+            "status": "operational"
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving cache stats: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving cache stats")
+
+@router.post("/gr2/clear-cache")
+async def clear_cache(user_id: Optional[str] = None):
+    """Clear loop guard cache for specific user or all users."""
+    if not GR2_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Golden Retriever 2.0 not available")
+    
+    try:
+        loop_guard.clear_cache(user_id)
+        return {
+            "message": f"Cache cleared for {'all users' if user_id is None else f'user {user_id}'}",
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail="Error clearing cache")
+
+@router.get("/gr2/analogies")
+async def get_available_analogies():
+    """Get list of available analogies for debugging."""
+    if not GR2_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Golden Retriever 2.0 not available")
+    
+    try:
+        from gr2.screen_rag import GR2
+        gr2_instance = GR2()
+        analogies = list(gr2_instance.analogies.keys())
+        return {
+            "available_analogies": analogies,
+            "count": len(analogies),
+            "status": "operational"
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving analogies: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving analogies") 

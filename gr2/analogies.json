@@ -1,0 +1,62 @@
+{
+  "delta": {
+    "analogy": "Think of delta like a speedometer for your option - it shows how fast the option price changes when BTC moves $1. A delta of 0.5 means your option gains 50 cents for every $1 BTC rises.",
+    "simple": "Delta is how much your option price moves when BTC moves $1."
+  },
+  "gamma": {
+    "analogy": "Gamma is like acceleration in a car - it shows how much your delta changes as BTC moves. High gamma means your option's sensitivity to BTC price changes is increasing rapidly.",
+    "simple": "Gamma shows how much delta changes when BTC moves."
+  },
+  "theta": {
+    "analogy": "Theta is like a melting ice cube - it shows how much value your option loses each day due to time passing. The closer to expiration, the faster the ice melts.",
+    "simple": "Theta is daily time decay - your option loses value each day."
+  },
+  "vega": {
+    "analogy": "Vega is like a weather forecast sensitivity - it shows how much your option price changes when market uncertainty (volatility) changes. More uncertainty = higher option prices.",
+    "simple": "Vega shows how option price changes when volatility changes."
+  },
+  "ITM": {
+    "analogy": "In-the-money is like having a winning lottery ticket - your option has real value right now. For calls, it's when BTC is above your strike price.",
+    "simple": "ITM means your option has real value right now."
+  },
+  "OTM": {
+    "analogy": "Out-of-the-money is like a lottery ticket that needs the numbers to change - your option has no real value yet, but could become valuable if BTC moves your way.",
+    "simple": "OTM means your option has no real value yet."
+  },
+  "ATM": {
+    "analogy": "At-the-money is like being exactly on the 50-yard line - your strike price is very close to current BTC price, giving you equal chance of profit or loss.",
+    "simple": "ATM means your strike is close to current BTC price."
+  },
+  "premium": {
+    "analogy": "Premium is like the price you pay for insurance - it's what you pay upfront for the right to buy or sell BTC at a specific price later.",
+    "simple": "Premium is the price you pay for the option."
+  },
+  "strike": {
+    "analogy": "Strike price is like the price tag on a rain check - it's the guaranteed price you can buy or sell BTC at, no matter what the market does.",
+    "simple": "Strike is the guaranteed price in your option contract."
+  },
+  "expiry": {
+    "analogy": "Expiry is like an expiration date on milk - after this date, your option becomes worthless and you can't use it anymore.",
+    "simple": "Expiry is when your option contract ends."
+  },
+  "volatility": {
+    "analogy": "Volatility is like weather unpredictability - high volatility means BTC prices are swinging wildly, making options more expensive due to uncertainty.",
+    "simple": "Volatility measures how much BTC price swings around."
+  },
+  "hedging": {
+    "analogy": "Hedging is like buying insurance for your house - you pay a small amount to protect against big losses if something goes wrong.",
+    "simple": "Hedging protects you from big losses."
+  },
+  "assignment": {
+    "analogy": "Assignment is like being forced to sell your car at a predetermined price - when someone exercises their option against you, you must fulfill the contract.",
+    "simple": "Assignment means you must fulfill the option contract."
+  },
+  "intrinsic_value": {
+    "analogy": "Intrinsic value is like the real money in your pocket - it's the actual profit you'd make if you exercised the option right now.",
+    "simple": "Intrinsic value is real profit if you exercise now."
+  },
+  "time_value": {
+    "analogy": "Time value is like paying extra for a longer warranty - it's the extra premium you pay for the chance that the option might become more valuable before expiry.",
+    "simple": "Time value is extra premium for future potential."
+  }
+} 

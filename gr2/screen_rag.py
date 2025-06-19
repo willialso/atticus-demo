@@ -6,6 +6,8 @@ import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from gr2.config import BTC_OPTIONS_KB, CONFIDENCE_THRESHOLD, MIN_RETRIEVED_DOCS
+from gr2.post_processor import clean_response, extract_jargon_terms, add_analogy_prompt
+from gr2.loop_guard import loop_guard
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ class GoldenRetrieverRAG:
     def __init__(self, knowledge_base: List[Dict] = None):
         self.knowledge_base = knowledge_base or BTC_OPTIONS_KB
         self._setup_models()
+        self._load_analogies()
         
     def _setup_models(self):
         """Initialize models for the Golden Retriever pipeline."""
@@ -32,6 +35,15 @@ class GoldenRetrieverRAG:
         self.identify_context = self._identify_context_simple
         self.augment_question = self._augment_question_simple
         self.generate_answer = self._generate_answer_simple
+
+    def _load_analogies(self):
+        """Load analogies from JSON file."""
+        try:
+            with open('gr2/analogies.json', 'r') as f:
+                self.analogies = json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load analogies: {e}")
+            self.analogies = {}
 
     def _identify_jargon_simple(self, question: str) -> List[str]:
         """Simple jargon identification based on keywords."""
@@ -65,8 +77,12 @@ class GoldenRetrieverRAG:
         return "; ".join(context_parts) if context_parts else "No specific context available"
 
     def _augment_question_simple(self, question: str, jargon_terms: List[str], context: str) -> str:
-        """Simple question augmentation."""
+        """Simple question augmentation with analogy requests."""
         augmented = question
+        
+        # Add analogy request for jargon terms
+        if jargon_terms:
+            augmented = add_analogy_prompt(augmented, jargon_terms)
         
         if jargon_terms:
             augmented += f" [Terms: {', '.join(jargon_terms)}]"
@@ -92,6 +108,12 @@ class GoldenRetrieverRAG:
         
         answer = f"Based on your question about '{question}' and the current context ({context_info}), here's what you need to know:\n\n"
         answer += f"{primary_doc['content']}"
+        
+        # Add analogies for jargon terms
+        jargon_terms = extract_jargon_terms(question)
+        for term in jargon_terms:
+            if term in self.analogies:
+                answer += f"\n\n{self.analogies[term]['analogy']}"
         
         if len(retrieved_docs) > 1:
             answer += f"\n\nAdditional information: {retrieved_docs[1]['title']}"
