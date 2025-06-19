@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, AlertCircle, Wifi, WifiOff } from 'lucide-react';
+import { Send, Loader2, AlertCircle, Wifi, WifiOff, Radio } from 'lucide-react';
 import { useChat, ChatStatus } from '../../hooks/useChat';
 import { StatusBanner } from '../StatusBanner';
 
@@ -21,8 +21,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
-  // Use our enhanced chat hook
-  const { messages, status, sendMessage, clearMessages, retryConnection } = useChat();
+  // Use our enhanced chat hook with WebSocket integration
+  const { 
+    messages, 
+    status, 
+    sendMessage, 
+    clearMessages, 
+    retryConnection,
+    websocketStatus,
+    lastWebSocketError
+  } = useChat();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -40,7 +48,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         message: '',
         answer: 'Hello! I\'m Golden Retriever 2.0, your Bitcoin options trading assistant. I can help you with options strategies, Greeks, risk management, and more. What would you like to know?',
         timestamp: new Date(),
-        confidence: 1.0
+        confidence: 1.0,
+        source: 'http' as const
       };
       // We'll add this through the chat system
       sendMessage('', {
@@ -87,9 +96,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const getStatusIcon = () => {
     switch (status) {
       case 'online':
+      case 'websocket_connected':
         return <Wifi className="w-4 h-4 text-green-500" />;
       case 'loading':
         return <Loader2 className="w-4 h-4 text-yellow-500 animate-spin" />;
+      case 'websocket_disconnected':
+        return <Radio className="w-4 h-4 text-orange-500" />;
       case 'fallback':
       case 'error':
         return <AlertCircle className="w-4 h-4 text-red-500" />;
@@ -102,6 +114,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     switch (status) {
       case 'online':
         return 'Connected to Golden Retriever 2.0';
+      case 'websocket_connected':
+        return 'Connected (Real-time updates available)';
+      case 'websocket_disconnected':
+        return 'Connected (Real-time updates unavailable)';
       case 'loading':
         return 'Connecting...';
       case 'fallback':
@@ -110,6 +126,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return 'Connection Error';
       default:
         return 'Disconnected';
+    }
+  };
+
+  const getStatusColor = () => {
+    switch (status) {
+      case 'online':
+      case 'websocket_connected':
+        return 'text-green-600';
+      case 'websocket_disconnected':
+        return 'text-orange-600';
+      case 'loading':
+        return 'text-yellow-600';
+      case 'fallback':
+      case 'error':
+        return 'text-red-600';
+      default:
+        return 'text-gray-600';
     }
   };
 
@@ -122,7 +155,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <h2 className="text-lg font-semibold">Golden Retriever 2.0</h2>
             <div className="flex items-center space-x-1">
               {getStatusIcon()}
-              <span className="text-sm text-gray-600">{getStatusText()}</span>
+              <span className={`text-sm ${getStatusColor()}`}>{getStatusText()}</span>
             </div>
           </div>
           <button
@@ -135,6 +168,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         {/* Status Banner */}
         <StatusBanner status={status} onRetry={retryConnection} />
+
+        {/* WebSocket Status (if disconnected) */}
+        {websocketStatus === 'disconnected' && lastWebSocketError && (
+          <div className="bg-orange-50 border-l-4 border-orange-400 p-3 mx-4 mt-2">
+            <div className="flex items-center">
+              <Radio className="w-4 h-4 text-orange-500 mr-2" />
+              <span className="text-sm text-orange-700">
+                Real-time updates unavailable: {lastWebSocketError}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -156,10 +201,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   {message.message || message.answer}
                 </div>
                 
-                {/* Show confidence for assistant messages */}
-                {!message.message && !message.isError && message.confidence !== undefined && (
+                {/* Show confidence and source for assistant messages */}
+                {!message.message && !message.isError && (
                   <div className="mt-2 text-xs opacity-75">
-                    <div>Confidence: {(message.confidence * 100).toFixed(0)}%</div>
+                    <div>Confidence: {(message.confidence || 0) * 100}%</div>
+                    {message.source && (
+                      <div>Source: {message.source === 'websocket' ? 'Real-time' : 'HTTP API'}</div>
+                    )}
                   </div>
                 )}
               </div>
