@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, Union
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ValidationError, Field
 import json
+from uuid import uuid4
 
 # Add the project root to Python path to import gr2
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,8 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from gr2.screen_rag import GR2
     from gr2.config import SCREEN_SCHEMA
-    from gr2.post_processor import clean_response, format_bullet_points
-    from gr2.loop_guard import loop_guard
+    from gr2.post_processor import polish
     GR2_AVAILABLE = True
 except ImportError as e:
     logging.warning(f"Golden Retriever 2.0 not available: {e}")
@@ -90,18 +90,8 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             logger.warning(f"Screen state validation error: {e}")
             # Continue with default values
         
-        # Check for loops (repetitive questions)
-        user_id = req.user_id or "default_user"
-        is_loop, loop_response = loop_guard.check_loop(req.message, user_id)
-        
-        if is_loop:
-            return ChatResponse(
-                answer=loop_response,
-                confidence=1.0,
-                sources=[],
-                jargon_terms=[],
-                context_used="Loop prevention"
-            )
+        # Get user ID
+        user_id = req.user_id or str(uuid4())
         
         # Process with Golden Retriever 2.0
         result = GR2(
@@ -109,11 +99,8 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             screen_state=screen_state
         )
         
-        # Post-process the response for user-friendly output
-        cleaned_answer = clean_response(result.answer)
-        
-        # Format as bullet points if response is long
-        final_answer = format_bullet_points(cleaned_answer)
+        # Apply post-processing for clean, friendly output
+        final_answer = polish(user_id, result.answer, req.message)
         
         return ChatResponse(
             answer=final_answer,
@@ -127,7 +114,8 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         logger.error(f"Error in GR2 chat endpoint: {e}", exc_info=True)
         # Return fallback response
         fallback_answer = GR2.fallback(req.message) if GR2_AVAILABLE else "Service temporarily unavailable."
-        cleaned_fallback = clean_response(fallback_answer)
+        user_id = req.user_id or str(uuid4())
+        cleaned_fallback = polish(user_id, fallback_answer, req.message)
         return ChatResponse(
             answer=cleaned_fallback,
             confidence=0.0
@@ -184,11 +172,15 @@ async def test_gr2_endpoint(req: ChatRequest):
             screen_state=test_screen_state
         )
         
+        # Apply post-processing
+        user_id = req.user_id or "test_user"
+        final_answer = polish(user_id, result.answer, "What does Delta mean?")
+        
         return {
             "test_passed": True,
             "test_question": "What does Delta mean?",
             "test_result": {
-                "answer": result.answer[:100] + "..." if len(result.answer) > 100 else result.answer,
+                "answer": final_answer[:100] + "..." if len(final_answer) > 100 else final_answer,
                 "confidence": result.confidence,
                 "sources": result.retrieved_docs_titles
             }

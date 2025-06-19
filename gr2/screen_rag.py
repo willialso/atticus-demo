@@ -26,7 +26,6 @@ class GoldenRetrieverRAG:
     def __init__(self, knowledge_base: List[Dict] = None):
         self.knowledge_base = knowledge_base or BTC_OPTIONS_KB
         self._setup_models()
-        self._load_analogies()
         
     def _setup_models(self):
         """Initialize models for the Golden Retriever pipeline."""
@@ -82,7 +81,7 @@ class GoldenRetrieverRAG:
         
         # Add analogy request for jargon terms
         if jargon_terms:
-            augmented = add_analogy_prompt(augmented, jargon_terms)
+            augmented += " When you define an options term, add a plain-English analogy (e.g., 'A put is like paying for return insurance on a gadget: if it breaks (price drops) you get your money back.')"
         
         if jargon_terms:
             augmented += f" [Terms: {', '.join(jargon_terms)}]"
@@ -108,12 +107,6 @@ class GoldenRetrieverRAG:
         
         answer = f"Based on your question about '{question}' and the current context ({context_info}), here's what you need to know:\n\n"
         answer += f"{primary_doc['content']}"
-        
-        # Add analogies for jargon terms
-        jargon_terms = extract_jargon_terms(question)
-        for term in jargon_terms:
-            if term in self.analogies:
-                answer += f"\n\n{self.analogies[term]['analogy']}"
         
         if len(retrieved_docs) > 1:
             answer += f"\n\nAdditional information: {retrieved_docs[1]['title']}"
