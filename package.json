@@ -1,0 +1,7 @@
+{
+  "scripts": {
+    "build": "rm -rf dist && vite build",
+    "build:clean": "rm -rf dist node_modules/.vite && npm run build",
+    "build:debug": "rm -rf dist node_modules/.vite && VITE_DEBUG=true npm run build"
+  }
+} 
