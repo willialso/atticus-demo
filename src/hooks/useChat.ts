@@ -30,16 +30,16 @@ export interface UseChatReturn {
 export function useChat(): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>('idle');
+  const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 
   // WebSocket integration
   const {
     status: websocketStatus,
-    sendMessage: sendWebSocketMessage,
+    sendChatMessage: sendWebSocketChat,
     connect: connectWebSocket,
     disconnect: disconnectWebSocket,
     lastError: lastWebSocketError
   } = useWebSocket({
-    url: 'wss://atticus-demo.onrender.com/ws',
     maxReconnectAttempts: 3,
     reconnectInterval: 2000,
     maxReconnectInterval: 10000,
@@ -48,6 +48,33 @@ export function useChat(): UseChatReturn {
       if (wsMessage.type === 'price_update' || wsMessage.type === 'market_data') {
         console.log('📊 Real-time market data received:', wsMessage.data);
         // You can update UI with real-time data here
+      }
+    },
+    onChatResponse: (chatResponse) => {
+      // Handle chat responses from WebSocket
+      console.log('💬 Chat response received:', chatResponse);
+      
+      if (pendingMessageId) {
+        setMessages(prev => prev.map(msg => 
+          msg.id === pendingMessageId 
+            ? { 
+                ...msg, 
+                answer: chatResponse.data.answer, 
+                confidence: chatResponse.data.confidence,
+                isError: chatResponse.data.error ? true : false,
+                source: 'websocket'
+              }
+            : msg
+        ));
+        
+        // Update status based on response
+        if (chatResponse.data.error || chatResponse.data.confidence === 0) {
+          setStatus('fallback');
+        } else {
+          setStatus('online');
+        }
+        
+        setPendingMessageId(null);
       }
     },
     onConnect: () => {
@@ -74,17 +101,44 @@ export function useChat(): UseChatReturn {
       message,
       answer: '',
       timestamp,
-      source: 'http'
+      source: 'websocket'
     };
 
     setMessages(prev => [...prev, userMessage]);
     setStatus('loading');
+    setPendingMessageId(messageId);
 
     try {
-      // Use HTTP API for chat (more reliable than WebSocket for chat)
+      // Try WebSocket first (preferred method)
+      if (websocketStatus === 'connected') {
+        console.log('📤 Sending chat message via WebSocket');
+        sendWebSocketChat(message, screenState);
+        
+        // Set a timeout to fallback to HTTP if no response
+        setTimeout(() => {
+          if (pendingMessageId === messageId) {
+            console.log('⏰ WebSocket timeout, falling back to HTTP');
+            fallbackToHttp(message, messageId, screenState);
+          }
+        }, 10000); // 10 second timeout
+        
+      } else {
+        // Fallback to HTTP immediately if WebSocket not connected
+        console.log('🔌 WebSocket not connected, using HTTP fallback');
+        fallbackToHttp(message, messageId, screenState);
+      }
+
+    } catch (error) {
+      console.error('❌ Error sending message:', error);
+      fallbackToHttp(message, messageId, screenState);
+    }
+  }, [websocketStatus, sendWebSocketChat, pendingMessageId]);
+
+  const fallbackToHttp = useCallback(async (message: string, messageId: string, screenState: any) => {
+    try {
+      console.log('🔄 Using HTTP fallback for chat');
       const result = await chatWithRetry(message, screenState);
       
-      // Update the message with the response
       setMessages(prev => prev.map(msg => 
         msg.id === messageId 
           ? { 
@@ -97,20 +151,18 @@ export function useChat(): UseChatReturn {
           : msg
       ));
 
-      // Update status based on response
       if (result.confidence === 0) {
         setStatus('fallback');
       } else {
         setStatus('online');
       }
-
+      
     } catch (error) {
-      // Handle any unexpected errors
       setMessages(prev => prev.map(msg => 
         msg.id === messageId 
           ? { 
               ...msg, 
-              answer: "⚠️ Unexpected error occurred. Please try again.",
+              answer: "⚠️ Service temporarily unavailable. Please try again.",
               isError: true,
               source: 'http'
             }
@@ -118,11 +170,14 @@ export function useChat(): UseChatReturn {
       ));
       setStatus('error');
     }
+    
+    setPendingMessageId(null);
   }, []);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
     setStatus('idle');
+    setPendingMessageId(null);
   }, []);
 
   const retryConnection = useCallback(async () => {

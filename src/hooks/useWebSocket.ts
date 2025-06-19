@@ -11,12 +11,32 @@ interface WebSocketMessage {
   timestamp?: number;
 }
 
+interface ChatMessage {
+  type: 'chat';
+  message: string;
+  screen_state?: any;
+}
+
+interface ChatResponse {
+  type: 'chat_response';
+  data: {
+    answer: string;
+    confidence?: number;
+    sources?: string[];
+    jargon_terms?: string[];
+    context_used?: string;
+    error?: string;
+    timestamp: number;
+  };
+}
+
 interface WebSocketOptions {
   url?: string;
   maxReconnectAttempts?: number;
   reconnectInterval?: number;
   maxReconnectInterval?: number;
   onMessage?: (message: WebSocketMessage) => void;
+  onChatResponse?: (response: ChatResponse) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (error: Event) => void;
@@ -25,6 +45,7 @@ interface WebSocketOptions {
 interface UseWebSocketReturn {
   status: WebSocketStatus;
   sendMessage: (message: WebSocketMessage) => void;
+  sendChatMessage: (message: string, screenState?: any) => void;
   connect: () => void;
   disconnect: () => void;
   lastError: string | null;
@@ -38,6 +59,7 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     reconnectInterval = 1000,
     maxReconnectInterval = 30000,
     onMessage,
+    onChatResponse,
     onConnect,
     onDisconnect,
     onError
@@ -150,11 +172,17 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     try {
       const message: WebSocketMessage = JSON.parse(event.data);
       console.log('📨 WebSocket message received:', message);
+      
+      // Handle chat responses specifically
+      if (message.type === 'chat_response' && onChatResponse) {
+        onChatResponse(message as ChatResponse);
+      }
+      
       onMessage?.(message);
     } catch (error) {
       console.error('❌ Failed to parse WebSocket message:', error);
     }
-  }, [onMessage]);
+  }, [onMessage, onChatResponse]);
 
   // Connect function
   const connect = useCallback(() => {
@@ -223,6 +251,16 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     }
   }, []);
 
+  // Send chat message function
+  const sendChatMessage = useCallback((message: string, screenState?: any) => {
+    const chatMessage: ChatMessage = {
+      type: 'chat',
+      message,
+      screen_state: screenState
+    };
+    sendMessage(chatMessage);
+  }, [sendMessage]);
+
   // Auto-connect on mount
   useEffect(() => {
     connect();
@@ -237,6 +275,7 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
   return {
     status,
     sendMessage,
+    sendChatMessage,
     connect,
     disconnect,
     lastError,
