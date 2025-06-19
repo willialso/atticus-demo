@@ -1,32 +1,14 @@
 // src/hooks/useWebSocket.ts
-// Robust WebSocket hook with proper connection state management
+// Price-only WebSocket hook - no chat, no ping, just price updates
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 export type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'error' | 'reconnecting';
 
-interface WebSocketMessage {
-  type: string;
-  data?: any;
-  timestamp?: number;
-}
-
-interface ChatMessage {
-  type: 'chat';
-  message: string;
-  screen_state?: any;
-}
-
-interface ChatResponse {
-  type: 'chat_response';
+interface PriceUpdate {
+  type: 'price_update';
   data: {
-    answer: string;
-    confidence?: number;
-    sources?: string[];
-    jargon_terms?: string[];
-    context_used?: string;
-    error?: string;
-    timestamp: number;
+    price: number;
   };
 }
 
@@ -35,8 +17,7 @@ interface WebSocketOptions {
   maxReconnectAttempts?: number;
   reconnectInterval?: number;
   maxReconnectInterval?: number;
-  onMessage?: (message: WebSocketMessage) => void;
-  onChatResponse?: (response: ChatResponse) => void;
+  onPriceUpdate?: (price: number) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (error: Event) => void;
@@ -44,8 +25,6 @@ interface WebSocketOptions {
 
 interface UseWebSocketReturn {
   status: WebSocketStatus;
-  sendMessage: (message: WebSocketMessage) => void;
-  sendChatMessage: (message: string, screenState?: any) => void;
   connect: () => void;
   disconnect: () => void;
   lastError: string | null;
@@ -58,8 +37,7 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     maxReconnectAttempts = 5,
     reconnectInterval = 1000,
     maxReconnectInterval = 30000,
-    onMessage,
-    onChatResponse,
+    onPriceUpdate,
     onConnect,
     onDisconnect,
     onError
@@ -177,26 +155,14 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
       try {
         const payload = JSON.parse(message);
         
-        // Handle server-initiated ping (keep-alive)
-        if (payload.type === "ping") {
-          console.log('🏓 Received ping from server, sending pong');
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: "pong" }));
-          }
-          return; // don't touch React state
-        }
-        
-        // Handle chat responses
-        if (payload.type === "chat_response") {
-          console.log('💬 Chat response received:', payload);
-          if (onChatResponse) {
-            onChatResponse(payload);
+        // Handle price updates
+        if (payload.type === "price_update") {
+          console.log('💰 Price update received:', payload);
+          if (onPriceUpdate) {
+            onPriceUpdate(payload.data.price);
           }
           return;
         }
-        
-        // Handle other JSON messages
-        onMessage?.({ type: payload.type || 'message', data: payload.data || payload, timestamp: Date.now() });
         
       } catch (jsonError) {
         // Handle legacy text format for backward compatibility
@@ -216,27 +182,17 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
         // Handle legacy chat responses (plain text)
         if (typeof message === 'string' && !message.startsWith('Echo:') && !message.startsWith('pong')) {
           // This is likely a chat response
-          if (onChatResponse) {
-            onChatResponse({
-              type: 'chat_response',
-              data: {
-                answer: message,
-                confidence: 1.0,
-                sources: [],
-                jargon_terms: [],
-                context_used: '',
-                timestamp: Date.now()
-              }
-            });
+          if (onPriceUpdate) {
+            onPriceUpdate(parseFloat(message));
           }
         }
         
-        onMessage?.({ type: 'message', data: message, timestamp: Date.now() });
+        onPriceUpdate?.(parseFloat(message));
       }
     } catch (error) {
       console.error('❌ Failed to parse WebSocket message:', error);
     }
-  }, [onMessage, onChatResponse]);
+  }, [onPriceUpdate]);
 
   // Connect function
   const connect = useCallback(() => {
@@ -285,43 +241,6 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
     isConnectingRef.current = false;
   }, [cleanup]);
 
-  // Send message function
-  const sendMessage = useCallback((message: WebSocketMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      try {
-        const messageWithTimestamp = {
-          ...message,
-          timestamp: Date.now()
-        };
-        wsRef.current.send(JSON.stringify(messageWithTimestamp));
-        console.log('📤 WebSocket message sent:', messageWithTimestamp);
-      } catch (error) {
-        console.error('❌ Failed to send WebSocket message:', error);
-        setLastError('Failed to send message');
-      }
-    } else {
-      console.warn('⚠️ WebSocket not connected, cannot send message');
-      setLastError('WebSocket not connected');
-    }
-  }, []);
-
-  // Send chat message using JSON format
-  const sendChatMessage = useCallback((message: string, screenState: any = {}) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const chatMessage = {
-        type: "chat",
-        message: message,
-        screen_state: screenState,
-        timestamp: Date.now()
-      };
-      console.log('📤 Sending chat message:', chatMessage);
-      wsRef.current.send(JSON.stringify(chatMessage));
-    } else {
-      console.error('❌ WebSocket not connected, cannot send chat message');
-      setLastError('WebSocket not connected');
-    }
-  }, []);
-
   // Auto-connect on mount
   useEffect(() => {
     connect();
@@ -335,8 +254,6 @@ export function useWebSocket(options: WebSocketOptions = {}): UseWebSocketReturn
 
   return {
     status,
-    sendMessage,
-    sendChatMessage,
     connect,
     disconnect,
     lastError,
