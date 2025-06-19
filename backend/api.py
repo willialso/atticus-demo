@@ -25,6 +25,14 @@ from backend.utils import setup_logger # Your logging utility
 # Add this import for SandboxService
 from sandbox.api.websocket_extension import SandboxService
 
+# Add Golden Retriever 2.0 router
+try:
+    from backend.api_gr2 import router as gr2_router
+    GR2_ROUTER_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Golden Retriever 2.0 router not available: {e}")
+    GR2_ROUTER_AVAILABLE = False
+
 # Conditional imports
 try:
     from backend.rl_hedger import RLHedger
@@ -99,6 +107,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include Golden Retriever 2.0 router
+if GR2_ROUTER_AVAILABLE:
+    app.include_router(gr2_router, prefix="", tags=["Golden Retriever 2.0"])
+    logger.info("✅ Golden Retriever 2.0 router included")
+else:
+    logger.warning("⚠️ Golden Retriever 2.0 router not included - not available")
 
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):

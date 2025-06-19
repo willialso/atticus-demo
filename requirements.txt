@@ -16,3 +16,4 @@ python-dateutil>=2.8.2
 aiofiles>=23.2.0
 websocket-client>=1.6.4
 httpx>=0.24.0  # Required for TestClient
+dspy-ai>=2.6.27  # Golden Retriever 2.0 dependency
