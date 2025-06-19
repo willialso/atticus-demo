@@ -2,6 +2,23 @@
 # Screen-State Schema for Golden Retriever 2.0
 
 from typing import Dict, Any, Union, List
+import logging
+
+logger = logging.getLogger(__name__)
+
+# System prompt for the LLM
+SYSTEM_PROMPT = """
+You are a friendly BTC-options coach.
+
+When you define a term, include a simple analogy
+(e.g. "A put is like return insurance on a gadget…").
+
+Never mention Greeks unless the retrieved context
+explicitly contains a Greek term.
+"""
+
+# Greek terms for filtering
+GREEK_TERMS = {"delta", "gamma", "theta", "vega", "rho"}
 
 SCREEN_SCHEMA = {
     "current_btc_price": float,
@@ -15,57 +32,57 @@ SCREEN_SCHEMA = {
 # BTC Options Knowledge Base for v1 scope
 BTC_OPTIONS_KB = [
     {
-        "id": "delta",
-        "title": "Delta",
-        "content": "Delta shows how much the option price is expected to move for a $1 move in BTC. For calls, delta ranges from 0 to 1. For puts, delta ranges from -1 to 0. ATM options have delta around 0.5 for calls and -0.5 for puts."
+        "title": "Delta - Price Sensitivity",
+        "content": "Delta measures how much an option's price changes when the underlying asset (Bitcoin) moves by $1. A delta of 0.5 means the option price moves $0.50 when Bitcoin moves $1.00. Think of delta as the 'speedometer' of your option - it tells you how fast your position changes with market moves.",
+        "topic": "greeks"
     },
     {
-        "id": "gamma",
-        "title": "Gamma", 
-        "content": "Gamma measures the rate of change in delta as the underlying BTC price changes. It's highest for ATM options and decreases as options move ITM or OTM. Gamma represents the 'acceleration' of option price changes."
+        "title": "Gamma - Acceleration",
+        "content": "Gamma measures how much delta changes when the underlying asset moves. It's highest for at-the-money options and decreases as options move in or out of the money. Gamma is like the 'accelerator' - it tells you how quickly your delta (and thus your position sensitivity) changes.",
+        "topic": "greeks"
     },
     {
-        "id": "theta",
-        "title": "Theta",
-        "content": "Theta measures the time decay of an option's value. It shows how much the option loses value each day as it approaches expiration. Theta is typically negative (time decay) and accelerates as expiration approaches."
+        "title": "Theta - Time Decay",
+        "content": "Theta measures how much an option's value decreases as time passes. Options lose value as they approach expiration, even if the underlying asset doesn't move. Think of theta as the 'ticking clock' - every day that passes, your option becomes slightly less valuable.",
+        "topic": "greeks"
     },
     {
-        "id": "vega",
-        "title": "Vega",
-        "content": "Vega measures the sensitivity of an option's price to changes in implied volatility. Higher vega means the option price is more sensitive to volatility changes. Vega is highest for ATM options and decreases for ITM/OTM options."
+        "title": "Vega - Volatility Sensitivity",
+        "content": "Vega measures how much an option's price changes when implied volatility changes by 1%. Higher volatility generally means higher option prices. Vega is like the 'weather forecast' - it tells you how much your option value changes when market uncertainty (volatility) changes.",
+        "topic": "greeks"
     },
     {
-        "id": "strike_selection",
-        "title": "Strike Selection",
-        "content": "If no strike is chosen, the UI suggests the nearest ATM (At-The-Money) strike. ATM strikes have strike prices closest to the current BTC price. ITM (In-The-Money) strikes are below current price for calls and above for puts. OTM (Out-of-The-Money) strikes are above current price for calls and below for puts."
+        "title": "Call Options Basics",
+        "content": "A call option gives you the right to buy Bitcoin at a specific price (strike) before expiration. You buy calls when you expect Bitcoin to rise. Think of a call like a reservation at a restaurant - you pay a small fee now to lock in the right to buy at today's price, even if prices go up later.",
+        "topic": "basics"
     },
     {
-        "id": "moneyness",
-        "title": "Moneyness",
-        "content": "Moneyness describes the relationship between the strike price and current BTC price. ITM (In-The-Money) options have intrinsic value. ATM (At-The-Money) options have strike prices near the current price. OTM (Out-of-The-Money) options have no intrinsic value but may have time value."
+        "title": "Put Options Basics",
+        "content": "A put option gives you the right to sell Bitcoin at a specific price (strike) before expiration. You buy puts when you expect Bitcoin to fall. Think of a put like insurance on your Bitcoin - you pay a premium now to protect against price drops, like car insurance protects against accidents.",
+        "topic": "basics"
     },
     {
-        "id": "premium_calculation",
-        "title": "Premium Calculation",
-        "content": "Option premium consists of intrinsic value (for ITM options) plus time value. The Black-Scholes model calculates fair value based on current price, strike, time to expiry, volatility, and risk-free rate. Premium is paid in BTC but displayed in USD for convenience."
+        "title": "Strike Price Selection",
+        "content": "The strike price is the price at which you can buy (call) or sell (put) Bitcoin. At-the-money (ATM) strikes are closest to current Bitcoin price. In-the-money (ITM) options have intrinsic value, while out-of-the-money (OTM) options are cheaper but riskier. Choose based on your market outlook and risk tolerance.",
+        "topic": "strategy"
     },
     {
-        "id": "expiry_times",
-        "title": "Expiry Times",
-        "content": "Available expiry times are 2-Hour, 4-Hour, 8-Hour, and 12-Hour. Shorter expiries have higher theta (time decay) and lower vega (volatility sensitivity). Choose expiry based on your market outlook and risk tolerance."
+        "title": "Expiration Timeframes",
+        "content": "Options expire at specific times. Shorter expirations (minutes to hours) are cheaper but decay faster. Longer expirations (days to weeks) cost more but give you more time for your prediction to be right. Choose expiration based on when you expect your market move to happen.",
+        "topic": "basics"
     },
     {
-        "id": "option_types",
-        "title": "Option Types",
-        "content": "Calls give the right to buy BTC at the strike price. Puts give the right to sell BTC at the strike price. Calls profit when BTC rises above strike + premium. Puts profit when BTC falls below strike - premium."
+        "title": "Premium and Pricing",
+        "content": "Option premium is the price you pay for the option. It consists of intrinsic value (if any) plus time value. Premiums are higher for longer expirations and when volatility is high. The premium is your maximum loss when buying options - you can't lose more than what you paid.",
+        "topic": "basics"
     },
     {
-        "id": "risk_management",
         "title": "Risk Management",
-        "content": "Long options have limited risk (premium paid) and unlimited profit potential. Short options have unlimited risk and limited profit (premium received). Always consider position sizing and portfolio diversification."
+        "content": "Never risk more than you can afford to lose. Options can expire worthless, so only use money you're comfortable losing. Consider position sizing - don't put all your capital in one trade. Use stop-losses or position limits to manage risk. Remember: options are leverage, so small market moves can create large gains or losses.",
+        "topic": "strategy"
     }
 ]
 
 # Confidence thresholds for fallback
-CONFIDENCE_THRESHOLD = 0.25
+CONFIDENCE_THRESHOLD = 0.3
 MIN_RETRIEVED_DOCS = 1 

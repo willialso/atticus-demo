@@ -6,7 +6,7 @@ import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from gr2.loop_guard import loop_guard
-from gr2.config import BTC_OPTIONS_KB, CONFIDENCE_THRESHOLD, MIN_RETRIEVED_DOCS
+from gr2.config import BTC_OPTIONS_KB, CONFIDENCE_THRESHOLD, MIN_RETRIEVED_DOCS, GREEK_TERMS
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +66,8 @@ class GoldenRetrieverRAG:
         return "; ".join(context_parts) if context_parts else "No specific context available"
 
     def _augment_question_simple(self, question: str, jargon_terms: List[str], context: str) -> str:
-        """Simple question augmentation with analogy requests."""
+        """Simple question augmentation with context."""
         augmented = question
-        
-        # Add analogy request for jargon terms
-        if jargon_terms:
-            augmented += " When you define an options term, add a plain-English analogy (e.g., 'A put is like paying for return insurance on a gadget: if it breaks (price drops) you get your money back.')"
         
         if jargon_terms:
             augmented += f" [Terms: {', '.join(jargon_terms)}]"
@@ -80,6 +76,51 @@ class GoldenRetrieverRAG:
             augmented += f" [Context: {context}]"
         
         return augmented
+
+    def _filtered_retriever(self, question: str) -> List[Dict]:
+        """
+        Filtered retrieval that excludes Greek topics unless Greek terms are mentioned.
+        
+        Args:
+            question: User question
+            
+        Returns:
+            Filtered list of relevant documents
+        """
+        try:
+            question_lower = question.lower()
+            
+            # Check if question contains Greek terms
+            contains_greek_terms = any(term in question_lower for term in GREEK_TERMS)
+            
+            relevant_docs = []
+            
+            for doc in self.knowledge_base:
+                # Skip Greek topics unless Greek terms are mentioned
+                if doc.get("topic") == "greeks" and not contains_greek_terms:
+                    continue
+                
+                # Check if question contains keywords from doc title or content
+                title_lower = doc["title"].lower()
+                content_lower = doc["content"].lower()
+                
+                # Score based on keyword matches
+                score = 0
+                if any(word in question_lower for word in title_lower.split()):
+                    score += 2
+                if any(word in question_lower for word in content_lower.split()):
+                    score += 1
+                
+                if score > 0:
+                    relevant_docs.append((doc, score))
+            
+            # Sort by score and return top docs
+            relevant_docs.sort(key=lambda x: x[1], reverse=True)
+            return [doc for doc, score in relevant_docs[:3]]
+            
+        except Exception as e:
+            logger.error(f"Error in filtered retrieval: {e}")
+            return []
 
     def _generate_answer_simple(self, question: str, screen_state: Dict, retrieved_docs: List[Dict]) -> str:
         """Generate answer based on retrieved documents and screen context."""
@@ -102,41 +143,6 @@ class GoldenRetrieverRAG:
             answer += f"\n\nAdditional information: {retrieved_docs[1]['title']}"
         
         return answer
-
-    def _retrieve_relevant_docs(self, question: str, screen_state: Dict) -> List[Dict]:
-        """Retrieve relevant documents from knowledge base."""
-        try:
-            # Simple keyword-based retrieval for v1
-            question_lower = question.lower()
-            relevant_docs = []
-            
-            for doc in self.knowledge_base:
-                # Check if question contains keywords from doc title or content
-                title_lower = doc["title"].lower()
-                content_lower = doc["content"].lower()
-                
-                # Score based on keyword matches
-                score = 0
-                if any(word in question_lower for word in title_lower.split()):
-                    score += 2
-                if any(word in question_lower for word in content_lower.split()):
-                    score += 1
-                
-                # Screen state relevance
-                if screen_state.get("selected_option_type"):
-                    if screen_state["selected_option_type"] in content_lower:
-                        score += 1
-                
-                if score > 0:
-                    relevant_docs.append((doc, score))
-            
-            # Sort by score and return top docs
-            relevant_docs.sort(key=lambda x: x[1], reverse=True)
-            return [doc for doc, score in relevant_docs[:3]]
-            
-        except Exception as e:
-            logger.error(f"Error in document retrieval: {e}")
-            return []
 
     def _calculate_confidence(self, retrieved_docs: List[Dict], question: str) -> float:
         """Calculate confidence score for the response."""
@@ -168,10 +174,10 @@ class GoldenRetrieverRAG:
             # Step 2: Identify relevant context from screen state
             context_used = self.identify_context(question, screen_state)
             
-            # Step 3: Retrieve relevant documents
-            retrieved_docs = self._retrieve_relevant_docs(question, screen_state)
+            # Step 3: Retrieve relevant documents with filtering
+            retrieved_docs = self._filtered_retriever(question)
             
-            # Step 4: Augment question with jargon definitions and context
+            # Step 4: Augment question with context
             augmented_question = self.augment_question(question, jargon_terms, context_used)
             
             # Step 5: Generate answer

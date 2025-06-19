@@ -5,7 +5,7 @@ import sys
 import os
 import logging
 from typing import Dict, Any, Optional, Union
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends, Header
 from pydantic import BaseModel, ValidationError, Field
 import json
 from uuid import uuid4
@@ -15,8 +15,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from gr2.screen_rag import GR2
-    from gr2.config import SCREEN_SCHEMA
-    from gr2.post_processor import polish
+    from gr2.config import SCREEN_SCHEMA, SYSTEM_PROMPT
+    from gr2.post_processor import polish, clear_user_cache, get_cache_stats
+    from gr2.kb_growth import kb_tracker
     GR2_AVAILABLE = True
 except ImportError as e:
     logging.warning(f"Golden Retriever 2.0 not available: {e}")
@@ -42,8 +43,12 @@ class ChatResponse(BaseModel):
     jargon_terms: Optional[list] = None
     context_used: Optional[str] = None
 
+async def get_user_id(x_user_id: Optional[str] = Header(None)) -> str:
+    """Extract user ID from header or generate one."""
+    return x_user_id or str(uuid4())
+
 @router.post("/gr2/chat")
-async def chat_endpoint(req: ChatRequest, request: Request):
+async def chat_endpoint(req: ChatRequest, request: Request, user_id: str = Depends(get_user_id)):
     """Golden Retriever 2.0 chat endpoint with screen-aware RAG."""
     try:
         if not GR2_AVAILABLE:
@@ -90,14 +95,22 @@ async def chat_endpoint(req: ChatRequest, request: Request):
             logger.warning(f"Screen state validation error: {e}")
             # Continue with default values
         
-        # Get user ID
-        user_id = req.user_id or str(uuid4())
-        
         # Process with Golden Retriever 2.0
         result = GR2(
             question=req.message,
             screen_state=screen_state
         )
+        
+        # Log missed questions for KB improvement
+        if result.confidence < 0.3 or len(result.retrieved_docs) < 1:
+            screen_context = f"BTC:${screen_state.get('current_btc_price', 0):,.0f}, {screen_state.get('selected_option_type', 'none')} option"
+            kb_tracker.log_miss(
+                question=req.message,
+                confidence=result.confidence,
+                retrieved_docs_count=len(result.retrieved_docs),
+                user_id=user_id,
+                screen_context=screen_context
+            )
         
         # Apply post-processing for clean, friendly output
         final_answer = polish(user_id, result.answer, req.message)
@@ -114,10 +127,9 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         logger.error(f"Error in GR2 chat endpoint: {e}", exc_info=True)
         # Return fallback response
         fallback_answer = GR2.fallback(req.message) if GR2_AVAILABLE else "Service temporarily unavailable."
-        user_id = req.user_id or str(uuid4())
-        cleaned_fallback = polish(user_id, fallback_answer, req.message)
+        final_fallback = polish(user_id, fallback_answer, req.message)
         return ChatResponse(
-            answer=cleaned_fallback,
+            answer=final_fallback,
             confidence=0.0
         )
 
@@ -146,6 +158,25 @@ async def get_knowledge_base():
     except Exception as e:
         logger.error(f"Error retrieving knowledge base: {e}")
         raise HTTPException(status_code=500, detail="Error retrieving knowledge base")
+
+@router.get("/gr2/kb-growth")
+async def get_kb_growth_stats():
+    """Get knowledge base growth statistics and improvement suggestions."""
+    if not GR2_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Golden Retriever 2.0 not available")
+    
+    try:
+        misses_summary = kb_tracker.get_misses_summary(days=30)
+        suggestions = kb_tracker.suggest_kb_improvements()
+        
+        return {
+            "misses_summary": misses_summary,
+            "improvement_suggestions": suggestions,
+            "total_suggestions": len(suggestions)
+        }
+    except Exception as e:
+        logger.error(f"Error getting KB growth stats: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving KB growth statistics")
 
 @router.post("/gr2/test")
 async def test_gr2_endpoint(req: ChatRequest):
@@ -200,45 +231,43 @@ async def get_cache_stats():
         raise HTTPException(status_code=503, detail="Golden Retriever 2.0 not available")
     
     try:
-        stats = loop_guard.get_cache_stats()
-        return {
-            "cache_stats": stats,
-            "status": "operational"
-        }
+        return get_cache_stats()
     except Exception as e:
-        logger.error(f"Error retrieving cache stats: {e}")
-        raise HTTPException(status_code=500, detail="Error retrieving cache stats")
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving cache statistics")
 
 @router.post("/gr2/clear-cache")
 async def clear_cache(user_id: Optional[str] = None):
-    """Clear loop guard cache for specific user or all users."""
+    """Clear the cache for a specific user or all users."""
     if not GR2_AVAILABLE:
         raise HTTPException(status_code=503, detail="Golden Retriever 2.0 not available")
     
     try:
-        loop_guard.clear_cache(user_id)
-        return {
-            "message": f"Cache cleared for {'all users' if user_id is None else f'user {user_id}'}",
-            "status": "success"
-        }
+        if user_id:
+            clear_user_cache(user_id)
+            return {"message": f"Cache cleared for user {user_id}"}
+        else:
+            # Clear all caches
+            from gr2.post_processor import CACHE
+            CACHE.clear()
+            return {"message": "All caches cleared"}
     except Exception as e:
         logger.error(f"Error clearing cache: {e}")
         raise HTTPException(status_code=500, detail="Error clearing cache")
 
 @router.get("/gr2/analogies")
 async def get_available_analogies():
-    """Get list of available analogies for debugging."""
+    """Get available analogies for debugging."""
     if not GR2_AVAILABLE:
         raise HTTPException(status_code=503, detail="Golden Retriever 2.0 not available")
     
     try:
-        from gr2.screen_rag import GR2
-        gr2_instance = GR2()
-        analogies = list(gr2_instance.analogies.keys())
+        import json
+        with open('gr2/analogies.json', 'r') as f:
+            analogies = json.load(f)
         return {
-            "available_analogies": analogies,
-            "count": len(analogies),
-            "status": "operational"
+            "analogies": analogies,
+            "count": len(analogies)
         }
     except Exception as e:
         logger.error(f"Error retrieving analogies: {e}")
