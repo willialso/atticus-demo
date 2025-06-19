@@ -4,9 +4,9 @@
 import sys
 import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, Field
 import json
 
 # Add the project root to Python path to import gr2
@@ -24,9 +24,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+class LovableContext(BaseModel):
+    screen_state: Dict[str, Any]
+
 class ChatRequest(BaseModel):
     message: str
-    screen_state: Dict[str, Any]  # Must conform to SCREEN_SCHEMA
+    screen_state: Optional[Dict[str, Any]] = None  # Original format
+    context: Optional[LovableContext] = None  # Lovable format
+    user_id: Optional[str] = None  # Lovable format
 
 class ChatResponse(BaseModel):
     answer: str
@@ -45,20 +50,39 @@ async def chat_endpoint(req: ChatRequest, request: Request):
                 confidence=0.0
             )
         
-        # Validate screen state against schema
+        # Handle both request formats
+        screen_state = None
+        if req.screen_state:
+            # Original format
+            screen_state = req.screen_state
+        elif req.context and req.context.screen_state:
+            # Lovable format
+            screen_state = req.context.screen_state
+        else:
+            # Default screen state if none provided
+            screen_state = {
+                "current_btc_price": 0.0,
+                "selected_option_type": "",
+                "selected_strike": None,
+                "selected_expiry": 0,
+                "visible_strikes": [],
+                "active_tab": ""
+            }
+        
+        # Validate and normalize screen state
         try:
             # Basic validation - ensure required fields exist
             required_fields = ["current_btc_price", "selected_option_type", "selected_strike", 
                              "selected_expiry", "visible_strikes", "active_tab"]
             for field in required_fields:
-                if field not in req.screen_state:
-                    req.screen_state[field] = None if field in ["selected_strike"] else 0.0 if field == "current_btc_price" else [] if field == "visible_strikes" else ""
+                if field not in screen_state:
+                    screen_state[field] = None if field in ["selected_strike"] else 0.0 if field == "current_btc_price" else [] if field == "visible_strikes" else ""
             
             # Type validation
-            if not isinstance(req.screen_state["current_btc_price"], (int, float)):
-                req.screen_state["current_btc_price"] = 0.0
-            if not isinstance(req.screen_state["visible_strikes"], list):
-                req.screen_state["visible_strikes"] = []
+            if not isinstance(screen_state["current_btc_price"], (int, float)):
+                screen_state["current_btc_price"] = 0.0
+            if not isinstance(screen_state["visible_strikes"], list):
+                screen_state["visible_strikes"] = []
                 
         except Exception as e:
             logger.warning(f"Screen state validation error: {e}")
@@ -67,7 +91,7 @@ async def chat_endpoint(req: ChatRequest, request: Request):
         # Process with Golden Retriever 2.0
         result = GR2(
             question=req.message,
-            screen_state=req.screen_state
+            screen_state=screen_state
         )
         
         return ChatResponse(
