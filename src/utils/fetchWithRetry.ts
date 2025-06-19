@@ -43,6 +43,7 @@ export async function fetchWithRetry(
         if (res.status >= 500) throw new Error("server");
         if (res.status === 403) throw new Error("forbidden");
         if (res.status === 404) throw new Error("not_found");
+        throw new Error(`server ${res.status}`);
       }
       
       return await res.json();
@@ -50,9 +51,13 @@ export async function fetchWithRetry(
       const isLast = attempt === maxRetries;
       const type = err.message;
 
-      if (type === "cors") {
+      // Surface real CORS/Network errors as suggested
+      if (type.startsWith('TypeError') && type.includes('fetch')) {
+        console.error('CORS/Network block', err);
         if (isLast) throw new Error("CORS-blocked");
-      } else if (type === "server") {
+      } else if (type === "cors") {
+        if (isLast) throw new Error("CORS-blocked");
+      } else if (type.startsWith("server")) {
         if (isLast) throw new Error("Server error");
       } else if (type === "forbidden") {
         if (isLast) throw new Error("Access forbidden");
