@@ -1,12 +1,18 @@
 services:
   - type: web
-    name: atticus-demo
+    name: btc-options-platform-backend
     env: python
+    plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT --ws-ping-interval 20 --ws-ping-timeout 20
+    startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.11
+        value: 3.11.0
+      - key: PORT
+        value: 8000
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
       - key: PYTHONPATH
         value: /opt/render/project/src
       - key: ATTICUS_DEMO_MODE
