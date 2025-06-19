@@ -100,13 +100,10 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=config.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# --- BULLET-PROOF CORS SETUP ---
+from backend.cors_config import setup_cors
+setup_cors(app)
+logger.info("✅ Bullet-proof CORS middleware configured")
 
 # Include Golden Retriever 2.0 router
 if GR2_ROUTER_AVAILABLE:

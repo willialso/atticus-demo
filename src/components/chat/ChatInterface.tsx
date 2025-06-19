@@ -1,17 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, AlertCircle, Wifi, WifiOff } from 'lucide-react';
-
-interface Message {
-  id: string;
-  text: string;
-  isUser: boolean;
-  timestamp: number;
-  error?: boolean;
-  errorDetails?: string;
-  confidence?: number;
-  sources?: string[];
-  jargonTerms?: string[];
-}
+import { useChat, ChatStatus } from '../../hooks/useChat';
+import { StatusBanner } from '../StatusBanner';
 
 interface ChatInterfaceProps {
   onClose: () => void;
@@ -21,8 +11,6 @@ interface ChatInterfaceProps {
   selectedOptionType?: 'call' | 'put';
 }
 
-type ConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error';
-
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({ 
   onClose,
   currentPrice,
@@ -30,11 +18,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   selectedExpiry,
   selectedOptionType
 }) => {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // Use our enhanced chat hook
+  const { messages, status, sendMessage, clearMessages, retryConnection } = useChat();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -45,52 +33,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }, [messages]);
 
   useEffect(() => {
-    // Test connection to Golden Retriever 2.0
-    testConnection();
-  }, []);
-
-  const testConnection = async () => {
-    setConnectionStatus('connecting');
-    try {
-      const response = await fetch('https://atticus-demo.onrender.com/gr2/health');
-      if (response.ok) {
-        setConnectionStatus('connected');
-        // Add welcome message
-        setMessages([{
-          id: '1',
-          text: 'Hello! I\'m Golden Retriever 2.0, your Bitcoin options trading assistant. I can help you with options strategies, Greeks, risk management, and more. What would you like to know?',
-          isUser: false,
-          timestamp: Date.now(),
-          confidence: 1.0,
-          sources: ['Welcome'],
-          jargonTerms: []
-        }]);
-      } else {
-        setConnectionStatus('error');
-      }
-    } catch (error) {
-      setConnectionStatus('error');
-      console.error('Connection test failed:', error);
-    }
-  };
-
-  const sendMessage = async () => {
-    if (!inputText.trim() || isLoading) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: inputText,
-      isUser: true,
-      timestamp: Date.now()
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    setInputText('');
-    setIsLoading(true);
-
-    try {
-      // Prepare screen context based on current state
-      const screenState = {
+    // Add welcome message when component mounts
+    if (messages.length === 0) {
+      const welcomeMessage = {
+        id: 'welcome',
+        message: '',
+        answer: 'Hello! I\'m Golden Retriever 2.0, your Bitcoin options trading assistant. I can help you with options strategies, Greeks, risk management, and more. What would you like to know?',
+        timestamp: new Date(),
+        confidence: 1.0
+      };
+      // We'll add this through the chat system
+      sendMessage('', {
         current_page: 'options_trading',
         user_position: selectedOptionType ? `long_${selectedOptionType}` : undefined,
         market_data: {
@@ -100,62 +53,44 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         selected_strike: selectedStrike,
         selected_expiry: selectedExpiry,
         selected_option_type: selectedOptionType
-      };
-
-      const response = await fetch('https://atticus-demo.onrender.com/gr2/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: inputText,
-          screen_state: screenState
-        })
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          text: data.answer,
-          isUser: false,
-          timestamp: Date.now(),
-          confidence: data.confidence,
-          sources: data.sources,
-          jargonTerms: data.jargon_terms
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      } else {
-        throw new Error(`HTTP ${response.status}`);
-      }
-    } catch (error) {
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: 'Sorry, I encountered an error while processing your request. Please try again.',
-        isUser: false,
-        timestamp: Date.now(),
-        error: true,
-        errorDetails: error instanceof Error ? error.message : 'Unknown error'
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
     }
+  }, []);
+
+  const handleSendMessage = async () => {
+    if (!inputText.trim() || status === 'loading') return;
+
+    // Prepare screen context based on current state
+    const screenState = {
+      current_page: 'options_trading',
+      user_position: selectedOptionType ? `long_${selectedOptionType}` : undefined,
+      market_data: {
+        btc_price: currentPrice || 104740.00,
+        volatility: 0.45
+      },
+      selected_strike: selectedStrike,
+      selected_expiry: selectedExpiry,
+      selected_option_type: selectedOptionType
+    };
+
+    await sendMessage(inputText, screenState);
+    setInputText('');
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      handleSendMessage();
     }
   };
 
   const getStatusIcon = () => {
-    switch (connectionStatus) {
-      case 'connected':
+    switch (status) {
+      case 'online':
         return <Wifi className="w-4 h-4 text-green-500" />;
-      case 'connecting':
+      case 'loading':
         return <Loader2 className="w-4 h-4 text-yellow-500 animate-spin" />;
+      case 'fallback':
       case 'error':
         return <AlertCircle className="w-4 h-4 text-red-500" />;
       default:
@@ -164,11 +99,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const getStatusText = () => {
-    switch (connectionStatus) {
-      case 'connected':
+    switch (status) {
+      case 'online':
         return 'Connected to Golden Retriever 2.0';
-      case 'connecting':
+      case 'loading':
         return 'Connecting...';
+      case 'fallback':
+        return 'Limited Mode';
       case 'error':
         return 'Connection Error';
       default:
@@ -196,49 +133,40 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </button>
         </div>
 
+        {/* Status Banner */}
+        <StatusBanner status={status} onRetry={retryConnection} />
+
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((message) => (
             <div
               key={message.id}
-              className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
+              className={`flex ${message.message ? 'justify-end' : 'justify-start'}`}
             >
               <div
                 className={`max-w-[80%] rounded-lg p-3 ${
-                  message.isUser
+                  message.message
                     ? 'bg-blue-500 text-white'
-                    : message.error
+                    : message.isError
                     ? 'bg-red-100 text-red-800'
                     : 'bg-gray-100 text-gray-800'
                 }`}
               >
-                <div className="text-sm">{message.text}</div>
+                <div className="text-sm">
+                  {message.message || message.answer}
+                </div>
                 
-                {/* Show confidence and sources for assistant messages */}
-                {!message.isUser && !message.error && (
+                {/* Show confidence for assistant messages */}
+                {!message.message && !message.isError && message.confidence !== undefined && (
                   <div className="mt-2 text-xs opacity-75">
-                    {message.confidence && (
-                      <div>Confidence: {(message.confidence * 100).toFixed(0)}%</div>
-                    )}
-                    {message.sources && message.sources.length > 0 && (
-                      <div>Sources: {message.sources.join(', ')}</div>
-                    )}
-                    {message.jargonTerms && message.jargonTerms.length > 0 && (
-                      <div>Terms: {message.jargonTerms.join(', ')}</div>
-                    )}
-                  </div>
-                )}
-                
-                {message.error && message.errorDetails && (
-                  <div className="mt-1 text-xs opacity-75">
-                    Error: {message.errorDetails}
+                    <div>Confidence: {(message.confidence * 100).toFixed(0)}%</div>
                   </div>
                 )}
               </div>
             </div>
           ))}
           
-          {isLoading && (
+          {status === 'loading' && (
             <div className="flex justify-start">
               <div className="bg-gray-100 rounded-lg p-3">
                 <div className="flex items-center space-x-2">
@@ -262,11 +190,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               placeholder="Ask about Bitcoin options, strategies, Greeks, risk management..."
               className="flex-1 border rounded-lg p-2 resize-none"
               rows={2}
-              disabled={isLoading || connectionStatus !== 'connected'}
+              disabled={status === 'loading'}
             />
             <button
-              onClick={sendMessage}
-              disabled={!inputText.trim() || isLoading || connectionStatus !== 'connected'}
+              onClick={handleSendMessage}
+              disabled={!inputText.trim() || status === 'loading'}
               className="bg-blue-500 text-white rounded-lg p-2 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Send className="w-4 h-4" />
