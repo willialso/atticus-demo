@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI
 import uvicorn
 import os
+import logging
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,34 @@ else:
     SENTIMENT_ANALYZER_AVAILABLE = False
 
 logger = setup_logger(__name__)
+
+# Global connection manager for WebSocket connections
+active_connections: set = set()
+
+async def broadcast_price_update(price: float, volume: float):
+    """Safe broadcast function for WebSocket connections"""
+    if not active_connections:
+        return
+        
+    payload = {"type": "price_update", "data": {"price": price, "volume": volume}}
+    disconnected = set()
+    
+    for ws in active_connections:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            disconnected.add(ws)
+    
+    # Clean up disconnected clients
+    active_connections -= disconnected
+
+def trigger_price_broadcast(price: float, volume: float):
+    """Call this from your sync price processing code - safe event loop handling"""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(broadcast_price_update(price, volume))
+    except RuntimeError:
+        logging.warning("No event loop available for price broadcast")
 
 # --- FIXED: Enhanced DataHub class with both async and sync updates ---
 class DataHub:
