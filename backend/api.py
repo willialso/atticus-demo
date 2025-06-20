@@ -169,11 +169,14 @@ class SimpleWebSocketManager:
         self._lock = asyncio.Lock() # For thread-safe modifications if needed, though FastAPI runs in single event loop
 
     async def connect(self, websocket: WebSocket, user_id: Optional[str] = None):
-        await websocket.accept()
+        # CRITICAL FIX: DO NOT accept the connection here.
+        # The main endpoint will handle that. This method only tracks the connection.
+        # await websocket.accept()  <-- REMOVED THIS LINE
+        
         async with self._lock:
             self.active_connections.append(websocket)
             if user_id: self.user_connections[user_id] = websocket
-        logger.info(f"🔌 WebSocket connected (Total: {len(self.active_connections)}, Users: {len(self.user_connections)})")
+        logger.info(f"🔌 WebSocket tracked (Total: {len(self.active_connections)}, Users: {len(self.user_connections)})")
 
     async def disconnect(self, websocket: WebSocket, user_id: Optional[str] = None):
         async with self._lock:
