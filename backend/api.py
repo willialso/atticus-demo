@@ -312,6 +312,7 @@ async def startup_event():
         # Start background tasks
         loop = asyncio.get_running_loop()
         app.state.position_updates_task = loop.create_task(background_position_updates(app))
+        app.state.market_updates_task = loop.create_task(background_market_updates(app))
         
         # --- THREAD-SAFE EVENT LOOP FIX ---
         global main_loop
@@ -357,6 +358,36 @@ async def background_position_updates(app_instance: FastAPI):
             break
         except Exception as e:
             logger.error(f"Error in background position updates: {e}", exc_info=True)
+
+async def background_market_updates(app_instance: FastAPI):
+    """Background task to update market data and broadcast to WebSocket clients."""
+    logger.info("Background market updates task started.")
+    while True:
+        try:
+            await asyncio.sleep(1.0) # Broadcasting every second
+            data_feed_manager = getattr(app_instance.state, 'data_feed_manager', None)
+            
+            # This check is critical - if the data feed stops, so do updates
+            if not data_feed_manager or not data_feed_manager.is_running:
+                continue
+
+            current_price = data_feed_manager.get_current_price()
+            if current_price and current_price > 0:
+                ws_manager = getattr(app_instance.state, 'ws_manager', None)
+                if ws_manager:
+                    # This broadcast sends the ongoing updates
+                    await ws_manager.broadcast_safe({
+                        "type": "market_update",
+                        "data": {
+                            "price": current_price,
+                            "timestamp": time.time()
+                        }
+                    })
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in background market updates: {e}", exc_info=True)
 
 # --- API Endpoints ---
 @app.get("/")
