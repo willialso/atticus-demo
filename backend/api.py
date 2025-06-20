@@ -552,7 +552,7 @@ async def close_position_endpoint(close_request: ClosePositionRequest, request_o
     except HTTPException: raise
     except Exception as e: logger.error(f"Position close error: {e}", exc_info=True); raise HTTPException(status_code=500, detail=f"Position close failed: {str(e)}")
 
-# +++ RESILIENT WebSocket endpoint with proper ConnectionClosed handling +++
+# +++ DEFINITIVE WebSocket endpoint with defensive send operations +++
 @app.websocket("/ws")
 async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[str] = None):
     local_ws_manager = getattr(websocket.app.state, 'ws_manager', None)
@@ -564,83 +564,88 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
         await websocket.close(code=1011, reason="Server-side WebSocket manager not available")
         return
 
+    # Accept the connection first
+    await websocket.accept()
     await local_ws_manager.connect(websocket, user_id)
     
     try:
-        initial_price = 0.0
-        if local_pricing_engine and hasattr(local_pricing_engine, 'current_price'):
-            initial_price = local_pricing_engine.current_price or 0.0
-
+        # Send initial connection message
+        initial_price = local_pricing_engine.current_price if local_pricing_engine else 0.0
         await websocket.send_text(json.dumps({
             "type": "connected",
-            "data": {
-                "current_price": initial_price,
-                "message": f"Successfully connected to {config.PLATFORM_NAME} WebSocket."
-            }
+            "data": {"current_price": initial_price}
         }))
         logger.info(f"Sent 'connected' message with initial price ${initial_price} to client.")
 
+        # Main loop for receiving messages and sending keep-alives
         while True:
             try:
+                # Wait for a message from the client with a timeout
                 data_received = await asyncio.wait_for(websocket.receive_text(), timeout=config.WEBSOCKET_TIMEOUT_SECONDS)
                 message_obj = json.loads(data_received)
 
+                # Process 'join' message
                 if message_obj.get("type") == "join":
                     logger.info(f"Client sent 'join' message: {message_obj.get('data')}")
-                    
-                    # --- CRITICAL FIX STARTS HERE ---
-                    # Acknowledge the join message, but handle cases where the client has already disconnected.
+                    # Defensively try to send acknowledgment
                     try:
                         await websocket.send_text(json.dumps({"type": "acknowledged", "data": "Join message received"}))
                     except Exception as e:
                         if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
-                            logger.warning("Could not send 'join' acknowledgment because client disconnected.")
-                            # Break the loop as the connection is gone.
+                            logger.warning("Could not send 'join' ack; client disconnected. Breaking loop.")
                             break
                         else:
                             raise e
-                    # --- CRITICAL FIX ENDS HERE ---
 
+                # Process 'ping' message
                 elif message_obj.get("type") == "ping":
                     try:
                         await websocket.send_text(json.dumps({"type": "pong", "timestamp": time.time()}))
                     except Exception as e:
                         if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
-                            logger.warning("Could not send 'pong' because client disconnected.")
+                            logger.warning("Could not send 'pong'; client disconnected. Breaking loop.")
                             break
                         else:
                             raise e
 
             except asyncio.TimeoutError:
+                # If client is silent, send a keep-alive to prevent timeout
                 try:
                     await websocket.send_text(json.dumps({"type": "keepalive", "timestamp": time.time()}))
                 except Exception as e:
                     if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
-                        logger.warning("Could not send 'keepalive' because client disconnected.")
+                        logger.warning("Could not send 'keepalive'; client disconnected. Breaking loop.")
                         break
                     else:
                         raise e
-
-            except WebSocketDisconnect:
-                logger.info("WebSocket disconnected by client during receive loop.")
-                break
             
+            except WebSocketDisconnect:
+                logger.info("WebSocketDisconnect exception caught. Client has disconnected.")
+                break # Exit the loop gracefully
+
             except json.JSONDecodeError:
                 logger.warning("Received invalid JSON from WebSocket client.")
-            
-            except Exception as e_loop:
-                # Catching other potential errors in the loop
-                logger.error(f"An unexpected error occurred in WebSocket loop: {e_loop}", exc_info=True)
-                break
+                # Continue loop to wait for next valid message
+                continue
+
+            # This exception is the one you are seeing in the logs
+            except Exception as e:
+                if "ConnectionClosedOK" in str(e) or "Connection closed" in str(e):
+                    logger.info("ConnectionClosedOK exception caught. Client has disconnected cleanly.")
+                    break
+                else:
+                    logger.error(f"An unexpected error occurred in WebSocket loop: {e}", exc_info=True)
+                    break
 
     except Exception as e_conn:
+        # Catch any other unexpected errors during the connection's lifecycle
         if "ConnectionClosed" in str(e_conn) or "Connection closed" in str(e_conn):
-            # This can happen if the client disconnects right after the initial handshake
-            logger.info("Connection closed by client shortly after initial handshake.")
+            logger.info("Connection closed by client during connection lifecycle.")
         else:
-            logger.error(f"Top-level WebSocket connection error: {e_conn}", exc_info=True)
+            logger.error(f"Top-level WebSocket error: {e_conn}", exc_info=True)
     
     finally:
+        # This cleanup will always run
         await local_ws_manager.disconnect(websocket, user_id)
         logger.info("WebSocket connection cleanup complete.")
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
