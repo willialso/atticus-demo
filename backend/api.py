@@ -11,6 +11,8 @@ import logging
 import math
 import uuid
 import os
+from threading import Thread
+import queue
 
 # --- CORE IMPORTS ---
 from backend import config # Your main configuration file
@@ -47,6 +49,52 @@ from backend import ws_price
 # Setup Logger
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logger = setup_logger(__name__)
+
+# --- THREAD-SAFE EVENT LOOP FIX ---
+# Global queue for price updates
+price_queue = queue.Queue()
+active_connections = set()
+main_loop = None
+
+async def broadcast_price_update(price: float, volume: float):
+    """Actual broadcast function - runs in main event loop"""
+    if not active_connections:
+        return
+        
+    payload = {"type": "price_update", "data": {"price": price, "volume": volume}}
+    disconnected = set()
+    
+    for ws in active_connections:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            disconnected.add(ws)
+    
+    active_connections.difference_update(disconnected)
+    logging.info(f"📊 Broadcasted to {len(active_connections)} clients: ${price:,.2f}")
+
+async def price_queue_processor():
+    """Background task that processes queued price updates"""
+    while True:
+        try:
+            if not price_queue.empty():
+                price, volume = price_queue.get_nowait()
+                await broadcast_price_update(price, volume)
+            await asyncio.sleep(0.1)  # Check queue every 100ms
+        except Exception as e:
+            logging.error(f"Price queue processor error: {e}")
+            await asyncio.sleep(1)
+
+def process_price_update_sync(price: float, volume: float):
+    """Thread-safe function called from sync price feed"""
+    try:
+        # Put price update in queue - this is thread-safe
+        price_queue.put_nowait((price, volume))
+        logging.info(f"📊 Queued price update: ${price:,.2f}")
+    except queue.Full:
+        logging.warning("Price queue full - skipping update")
+    except Exception as e:
+        logging.error(f"Failed to queue price update: {e}")
 
 # --- Pydantic Models ---
 class OptionIdentifier(BaseModel):
@@ -182,13 +230,10 @@ def _handle_price_update_sync_factory(app_instance: FastAPI):
                     pricing_engine_instance.update_market_data(price_val, volume_val)
                     _handle_price_update_sync.latest_price = price_val # Store on function object
                     
-                    # Broadcast price update using dedicated price WebSocket
-                    try:
-                        asyncio.create_task(ws_price.broadcast_price_update(price_val))
-                    except Exception as e:
-                        logger.error(f"Failed to broadcast price update: {e}")
-                    else:
-                        logger.info(f"✅ Price broadcast task created for ${price_val:,.2f}")
+                    # --- THREAD-SAFE EVENT LOOP FIX ---
+                    # Use thread-safe queue instead of problematic async call
+                    process_price_update_sync(price_val, volume_val)
+                    # --- END THREAD-SAFE EVENT LOOP FIX ---
                 else:
                     logger.warning(f"Invalid price value received: {price_val}")
                         
@@ -267,6 +312,14 @@ async def startup_event():
         # Start background tasks
         loop = asyncio.get_running_loop()
         app.state.position_updates_task = loop.create_task(background_position_updates(app))
+        
+        # --- THREAD-SAFE EVENT LOOP FIX ---
+        global main_loop
+        main_loop = loop
+        asyncio.create_task(price_queue_processor())
+        logger.info("🚀 Price queue processor started")
+        # --- END THREAD-SAFE EVENT LOOP FIX ---
+        
         logger.info("✅ Background tasks started.")
 
         # Set the startup complete event
