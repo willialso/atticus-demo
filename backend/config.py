@@ -139,7 +139,7 @@ CORS_ORIGINS = [
     "https://atticus-option-flow.lovable.app",
     "https://preview--turbo-options-platform.lovable.app",
     "https://turbo-options-platform.lovable.app",
-    "https://*.lovableproject.com",
+    "https://1a576357-c970-4272-b0e7-38700d4a29d3.lovableproject.com",
     "https://atticus-demo.onrender.com",
     "https://atticus-demo-1.onrender.com",
     "https://atticustrade.com",

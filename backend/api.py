@@ -361,7 +361,8 @@ async def background_position_updates(app_instance: FastAPI):
 
 async def background_market_updates(app_instance: FastAPI):
     """Background task to update market data and broadcast to WebSocket clients."""
-    logger.info("Background market updates task started.")
+    logger.info("🚀 Background market updates task started.")
+    update_count = 0
     while True:
         try:
             await asyncio.sleep(1.0) # Broadcasting every second
@@ -369,6 +370,7 @@ async def background_market_updates(app_instance: FastAPI):
             
             # This check is critical - if the data feed stops, so do updates
             if not data_feed_manager or not data_feed_manager.is_running:
+                logger.warning("⚠️ Data feed manager not available or not running")
                 continue
 
             current_price = data_feed_manager.get_current_price()
@@ -376,6 +378,7 @@ async def background_market_updates(app_instance: FastAPI):
                 ws_manager = getattr(app_instance.state, 'ws_manager', None)
                 if ws_manager:
                     # This broadcast sends the ongoing updates
+                    update_count += 1
                     await ws_manager.broadcast_safe({
                         "type": "market_update",
                         "data": {
@@ -383,11 +386,17 @@ async def background_market_updates(app_instance: FastAPI):
                             "timestamp": time.time()
                         }
                     })
+                    logger.info(f"📊 Market update #{update_count}: ${current_price:,.2f} broadcasted to {len(ws_manager.active_connections)} clients")
+                else:
+                    logger.warning("⚠️ WebSocket manager not available")
+            else:
+                logger.warning(f"⚠️ Invalid price received: {current_price}")
 
         except asyncio.CancelledError:
+            logger.info("🛑 Background market updates task cancelled")
             break
         except Exception as e:
-            logger.error(f"Error in background market updates: {e}", exc_info=True)
+            logger.error(f"❌ Error in background market updates: {e}", exc_info=True)
 
 # --- API Endpoints ---
 @app.get("/")
