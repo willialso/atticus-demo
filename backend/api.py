@@ -591,21 +591,14 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
                 data_received = await asyncio.wait_for(websocket.receive_text(), timeout=config.WEBSOCKET_TIMEOUT_SECONDS)
                 message_obj = json.loads(data_received)
 
-                # Process 'join' message, but DO NOT send a reply.
-                # Simply log it and continue the loop. The client will get price updates as confirmation.
+                # Process 'join' message as a one-way notification. DO NOT reply.
                 if message_obj.get("type") == "join":
                     logger.info(f"Client sent 'join' message: {message_obj.get('data')}. No ack needed.")
-                    # The 'pass' keyword means we do nothing and just continue the loop.
-                    pass 
-
-                elif message_obj.get("type") == "ping":
-                    try:
-                        await websocket.send_text(json.dumps({"type": "pong", "timestamp": time.time()}))
-                    except websockets.exceptions.ConnectionClosed:
-                        break
+                    pass # Simply continue the loop
 
             except asyncio.TimeoutError:
-                # If client is silent, send a keep-alive to prevent timeout
+                # If client is silent, SERVER sends a keep-alive to prevent network timeouts.
+                # This is a best practice for maintaining idle connections.
                 try:
                     await websocket.send_text(json.dumps({"type": "keepalive", "timestamp": time.time()}))
                 except websockets.exceptions.ConnectionClosed:
