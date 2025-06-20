@@ -18,7 +18,7 @@ services:
       - key: ATTICUS_DEMO_MODE
         value: "true"
       - key: ATTICUS_CORS_ORIGINS
-        value: "https://preview--atticus-option-flow.lovable.app,https://atticus-option-flow.lovable.app,https://atticus-demo.onrender.com,https://atticustrade.com,https://preview--turbo-options-platform.lovable.app,https://id-preview--1a576357-c970-4272-b0e7-38700d4a29d3.lovable.app"
+        value: "*"
       - key: ATTICUS_WS_PING_INTERVAL
         value: "20"
       - key: ATTICUS_WS_PING_TIMEOUT
