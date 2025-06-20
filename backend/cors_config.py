@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 ALLOWED_ORIGINS = [
     "https://preview--turbo-options-platform.lovable.app",
     "https://turbo-options-platform.lovable.app",
+    "https://id-preview--1a576357-c970-4272-b0e7-38700d4a29d3.lovable.app",  # New Lovable preview domain
     "http://localhost:3000",
     "http://localhost:3001",
     "http://localhost:5173",  # Vite default
