@@ -564,7 +564,7 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
 
     if not local_ws_manager:
         logger.error("WebSocket connection failed: ws_manager not found.")
-        # CRITICAL FIX: Don't accept here - just close without accepting
+        await websocket.accept()
         await websocket.close(code=1011, reason="Server-side WebSocket manager not available")
         return
 
@@ -597,11 +597,13 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
                     pass # Simply continue the loop
 
             except asyncio.TimeoutError:
-                # If client is silent, SERVER sends a keep-alive to prevent network timeouts.
-                # This is a best practice for maintaining idle connections.
+                # If the client has been silent, the SERVER sends a keep-alive message.
+                # This prevents Render's network from closing the idle connection [2, 5].
                 try:
                     await websocket.send_text(json.dumps({"type": "keepalive", "timestamp": time.time()}))
+                    logger.info("Sent keepalive message to idle client.")
                 except websockets.exceptions.ConnectionClosed:
+                    logger.warning("Could not send 'keepalive'; client disconnected. Breaking loop.")
                     break
             
             except (WebSocketDisconnect, websockets.exceptions.ConnectionClosed):
@@ -616,6 +618,7 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
         logger.error(f"Top-level WebSocket error: {e_conn}", exc_info=True)
     
     finally:
+        # This cleanup will always run
         await local_ws_manager.disconnect(websocket, user_id)
         logger.info("WebSocket connection cleanup complete.")
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
