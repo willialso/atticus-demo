@@ -879,6 +879,28 @@ async def get_available_prompts():
         ]
     }
 
+# --- Sandbox Status Endpoint ---
+@app.get("/sandbox-status", tags=["Sandbox"])
+async def get_sandbox_status():
+    """Endpoint to get the current status and analysis from the sandbox."""
+    try:
+        sandbox_service = getattr(app.state, 'sandbox_service', None)
+        if sandbox_service:
+            analysis = await sandbox_service.get_current_analysis()
+            return analysis
+        else:
+            return {
+                "status": "Sandbox not running or not initialized",
+                "sandbox_exists": False
+            }
+    except Exception as e:
+        logger.error(f"Error getting sandbox analysis: {e}", exc_info=True)
+        return {
+            "status": "Error retrieving sandbox analysis", 
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
+
 # --- Main Execution Guard (if api.py is run directly) ---
 if __name__ == "__main__":
     import uvicorn
