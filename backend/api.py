@@ -552,10 +552,9 @@ async def close_position_endpoint(close_request: ClosePositionRequest, request_o
     except HTTPException: raise
     except Exception as e: logger.error(f"Position close error: {e}", exc_info=True); raise HTTPException(status_code=500, detail=f"Position close failed: {str(e)}")
 
-# +++ ROBUST WebSocket endpoint with proper handshake and keep-alive +++
+# +++ RESILIENT WebSocket endpoint with proper ConnectionClosed handling +++
 @app.websocket("/ws")
 async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[str] = None):
-    # Get necessary components from app state
     local_ws_manager = getattr(websocket.app.state, 'ws_manager', None)
     local_pricing_engine = getattr(websocket.app.state, 'pricing_engine', None)
 
@@ -565,11 +564,9 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
         await websocket.close(code=1011, reason="Server-side WebSocket manager not available")
         return
 
-    # 1. Accept the connection and add it to the manager
     await local_ws_manager.connect(websocket, user_id)
     
     try:
-        # 2. CRITICAL FIX: Immediately send a "connected" message with the initial price
         initial_price = 0.0
         if local_pricing_engine and hasattr(local_pricing_engine, 'current_price'):
             initial_price = local_pricing_engine.current_price or 0.0
@@ -583,43 +580,67 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
         }))
         logger.info(f"Sent 'connected' message with initial price ${initial_price} to client.")
 
-        # 3. Enter the main loop to process incoming messages and keep the connection alive
         while True:
             try:
-                # Wait for a message from the client with a timeout
                 data_received = await asyncio.wait_for(websocket.receive_text(), timeout=config.WEBSOCKET_TIMEOUT_SECONDS)
                 message_obj = json.loads(data_received)
 
-                # 4. Handle different message types (like 'join' or 'ping')
                 if message_obj.get("type") == "join":
                     logger.info(f"Client sent 'join' message: {message_obj.get('data')}")
-                    # Acknowledge the join if needed
-                    await websocket.send_text(json.dumps({"type": "acknowledged", "data": "Join message received"}))
-                
+                    
+                    # --- CRITICAL FIX STARTS HERE ---
+                    # Acknowledge the join message, but handle cases where the client has already disconnected.
+                    try:
+                        await websocket.send_text(json.dumps({"type": "acknowledged", "data": "Join message received"}))
+                    except Exception as e:
+                        if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
+                            logger.warning("Could not send 'join' acknowledgment because client disconnected.")
+                            # Break the loop as the connection is gone.
+                            break
+                        else:
+                            raise e
+                    # --- CRITICAL FIX ENDS HERE ---
+
                 elif message_obj.get("type") == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong", "timestamp": time.time()}))
+                    try:
+                        await websocket.send_text(json.dumps({"type": "pong", "timestamp": time.time()}))
+                    except Exception as e:
+                        if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
+                            logger.warning("Could not send 'pong' because client disconnected.")
+                            break
+                        else:
+                            raise e
 
             except asyncio.TimeoutError:
-                # 5. CRITICAL FIX: Proactively send a keep-alive ping if no message is received
-                # This prevents proxies/load balancers from closing the idle connection
-                await websocket.send_text(json.dumps({"type": "keepalive", "timestamp": time.time()}))
+                try:
+                    await websocket.send_text(json.dumps({"type": "keepalive", "timestamp": time.time()}))
+                except Exception as e:
+                    if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
+                        logger.warning("Could not send 'keepalive' because client disconnected.")
+                        break
+                    else:
+                        raise e
 
             except WebSocketDisconnect:
                 logger.info("WebSocket disconnected by client during receive loop.")
-                break # Exit the loop on disconnect
+                break
             
             except json.JSONDecodeError:
                 logger.warning("Received invalid JSON from WebSocket client.")
             
             except Exception as e_loop:
-                logger.error(f"Error in WebSocket receive loop: {e_loop}", exc_info=True)
-                break # Exit loop on other errors
+                # Catching other potential errors in the loop
+                logger.error(f"An unexpected error occurred in WebSocket loop: {e_loop}", exc_info=True)
+                break
 
     except Exception as e_conn:
-        logger.error(f"Top-level WebSocket connection error: {e_conn}", exc_info=True)
+        if "ConnectionClosed" in str(e_conn) or "Connection closed" in str(e_conn):
+            # This can happen if the client disconnects right after the initial handshake
+            logger.info("Connection closed by client shortly after initial handshake.")
+        else:
+            logger.error(f"Top-level WebSocket connection error: {e_conn}", exc_info=True)
     
     finally:
-        # 6. Ensure client is always disconnected on exit
         await local_ws_manager.disconnect(websocket, user_id)
         logger.info("WebSocket connection cleanup complete.")
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
