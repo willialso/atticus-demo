@@ -563,7 +563,7 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
 
     if not local_ws_manager:
         logger.error("WebSocket connection failed: ws_manager not found.")
-        await websocket.accept()
+        # CRITICAL FIX: Don't accept here - just close without accepting
         await websocket.close(code=1011, reason="Server-side WebSocket manager not available")
         return
 
