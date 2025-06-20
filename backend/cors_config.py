@@ -27,36 +27,16 @@ def is_lovable_domain(origin: str) -> bool:
 def setup_cors(app):
     """Setup bullet-proof CORS middleware."""
     
-    logger.info(f"Setting up CORS middleware with origins: {ALLOWED_ORIGINS}")
+    logger.info("Setting up CORS middleware with wildcard origins")
     
     # Add CORS middleware - MUST be first middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Allow all origins for now to fix the issue
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=[
-            "*",
-            "Content-Type",
-            "Authorization",
-            "X-User-ID",
-            "X-Requested-With",
-            "Accept",
-            "Origin",
-            "Access-Control-Request-Method",
-            "Access-Control-Request-Headers"
-        ],
-        expose_headers=[
-            "*",
-            "Content-Type",
-            "X-User-ID",
-            "X-Request-ID"
-        ],
-        max_age=86400  # Cache preflight for 24 hours
+        allow_origins=["*"],  # Temporary fix - allows all domains
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+        allow_credentials=False  # Required when using "*"
     )
-    
-    # Add CORS error handling middleware
-    app.add_middleware(CORSErrorMiddleware)
     
     logger.info("✅ CORS middleware configured successfully")
 
