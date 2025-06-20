@@ -13,6 +13,7 @@ import uuid
 import os
 from threading import Thread
 import queue
+import websockets  # Add explicit import for ConnectionClosed exceptions
 
 # --- CORE IMPORTS ---
 from backend import config # Your main configuration file
@@ -573,7 +574,10 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
     
     try:
         # Send initial connection message
-        initial_price = local_pricing_engine.current_price if local_pricing_engine else 0.0
+        initial_price = 0.0
+        if local_pricing_engine and hasattr(local_pricing_engine, 'current_price') and local_pricing_engine.current_price > 0:
+            initial_price = local_pricing_engine.current_price
+            
         await websocket.send_text(json.dumps({
             "type": "connected",
             "data": {"current_price": initial_price}
@@ -593,34 +597,25 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
                     # Defensively try to send acknowledgment
                     try:
                         await websocket.send_text(json.dumps({"type": "acknowledged", "data": "Join message received"}))
-                    except Exception as e:
-                        if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
-                            logger.warning("Could not send 'join' ack; client disconnected. Breaking loop.")
-                            break
-                        else:
-                            raise e
+                    except websockets.exceptions.ConnectionClosed:
+                        logger.warning("Could not send 'join' ack; client disconnected. Breaking loop.")
+                        break
 
                 # Process 'ping' message
                 elif message_obj.get("type") == "ping":
                     try:
                         await websocket.send_text(json.dumps({"type": "pong", "timestamp": time.time()}))
-                    except Exception as e:
-                        if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
-                            logger.warning("Could not send 'pong'; client disconnected. Breaking loop.")
-                            break
-                        else:
-                            raise e
+                    except websockets.exceptions.ConnectionClosed:
+                        logger.warning("Could not send 'pong'; client disconnected. Breaking loop.")
+                        break
 
             except asyncio.TimeoutError:
                 # If client is silent, send a keep-alive to prevent timeout
                 try:
                     await websocket.send_text(json.dumps({"type": "keepalive", "timestamp": time.time()}))
-                except Exception as e:
-                    if "ConnectionClosed" in str(e) or "Connection closed" in str(e):
-                        logger.warning("Could not send 'keepalive'; client disconnected. Breaking loop.")
-                        break
-                    else:
-                        raise e
+                except websockets.exceptions.ConnectionClosed:
+                    logger.warning("Could not send 'keepalive'; client disconnected. Breaking loop.")
+                    break
             
             except WebSocketDisconnect:
                 logger.info("WebSocketDisconnect exception caught. Client has disconnected.")
@@ -628,24 +623,16 @@ async def websocket_connection_endpoint(websocket: WebSocket, user_id: Optional[
 
             except json.JSONDecodeError:
                 logger.warning("Received invalid JSON from WebSocket client.")
-                # Continue loop to wait for next valid message
                 continue
 
             # This exception is the one you are seeing in the logs
-            except Exception as e:
-                if "ConnectionClosedOK" in str(e) or "Connection closed" in str(e):
-                    logger.info("ConnectionClosedOK exception caught. Client has disconnected cleanly.")
-                    break
-                else:
-                    logger.error(f"An unexpected error occurred in WebSocket loop: {e}", exc_info=True)
-                    break
+            except websockets.exceptions.ConnectionClosed:
+                logger.info("ConnectionClosed (OK or Error) exception caught. Client has disconnected.")
+                break
 
     except Exception as e_conn:
         # Catch any other unexpected errors during the connection's lifecycle
-        if "ConnectionClosed" in str(e_conn) or "Connection closed" in str(e_conn):
-            logger.info("Connection closed by client during connection lifecycle.")
-        else:
-            logger.error(f"Top-level WebSocket error: {e_conn}", exc_info=True)
+        logger.error(f"Top-level WebSocket error: {e_conn}", exc_info=True)
     
     finally:
         # This cleanup will always run
